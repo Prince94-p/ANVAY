@@ -1,0 +1,157 @@
+import React, { useState, useEffect } from 'react';
+import {
+  Activity,
+  BarChart2,
+  TrendingUp,
+  Filter,
+  AlertTriangle,
+  ShieldCheck,
+  Building2,
+  MapPin
+} from 'lucide-react';
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell
+} from 'recharts';
+import { useTranslation } from 'react-i18next';
+import { useAuth } from '../context/AuthContext';
+
+export const DiseaseAnalyticsPage = () => {
+  const { t } = useTranslation();
+  const { token } = useAuth();
+
+  const [analyticsData, setAnalyticsData] = useState(null);
+  const [selectedDisease, setSelectedDisease] = useState('All');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchAnalytics = async () => {
+      try {
+        const res = await fetch('/api/analytics/epidemiology-overview', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const data = await res.json();
+        if (data.success) {
+          setAnalyticsData(data);
+        }
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchAnalytics();
+  }, [token]);
+
+  if (loading || !analyticsData) {
+    return <div className="p-12 text-center text-xs text-slate-500">Loading epidemiological metrics...</div>;
+  }
+
+  const { districts, timeSeriesTrends } = analyticsData;
+
+  // Flatten disease data for bar charts
+  const diseaseBreakdownCombined = [];
+  districts.forEach(d => {
+    d.diseaseBreakdown.forEach(dis => {
+      diseaseBreakdownCombined.push({
+        district: `${d.district} (${d.state})`,
+        disease: dis.disease,
+        cases: dis.cases,
+        trend: dis.trend,
+        isHotspot: dis.isHotspot
+      });
+    });
+  });
+
+  const pieData = [
+    { name: 'Dengue Fever', value: 1290, color: '#e11d48' },
+    { name: 'Malaria', value: 1150, color: '#d97706' },
+    { name: 'Respiratory / Asthma', value: 2430, color: '#0d9488' },
+    { name: 'Hypertension', value: 4020, color: '#3b82f6' },
+    { name: 'Type 2 Diabetes', value: 3120, color: '#8b5cf6' }
+  ];
+
+  return (
+    <div className="space-y-6 max-w-6xl mx-auto">
+      <div className="border-b border-slate-200 pb-4">
+        <div className="flex items-center gap-2 text-purple-700 text-xs font-bold uppercase tracking-wider mb-1">
+          <Activity className="w-4 h-4" />
+          <span>Macro Epidemiological Metrics</span>
+        </div>
+        <h1 className="text-2xl font-black text-slate-900">
+          Disease Pattern & Outbreak Velocity Analytics
+        </h1>
+        <p className="text-xs text-slate-500 mt-0.5">
+          Surveillance data continuously aggregated from verified hospital admission encounters.
+        </p>
+      </div>
+
+      {/* Chart Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Disease Proportions Pie Chart */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-4">
+          <h3 className="font-bold text-sm text-slate-900">
+            Regional Disease Burden Distribution
+          </h3>
+          <p className="text-xs text-slate-500">Proportion of reported clinical presentations across networks</p>
+
+          <div className="h-64 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={pieData}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={60}
+                  outerRadius={85}
+                  paddingAngle={4}
+                  dataKey="value"
+                >
+                  {pieData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  contentStyle={{ backgroundColor: '#0f172a', color: '#fff', borderRadius: '12px', fontSize: '11px' }}
+                />
+                <Legend wrapperStyle={{ fontSize: '11px' }} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        {/* District Comparative Cases */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-4">
+          <h3 className="font-bold text-sm text-slate-900">
+            District Active Case Load Comparison
+          </h3>
+          <p className="text-xs text-slate-500">Cross-district totals from network healthcare nodes</p>
+
+          <div className="h-64 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={districts}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <XAxis dataKey="district" stroke="#64748b" fontSize={11} />
+                <YAxis stroke="#64748b" fontSize={11} />
+                <Tooltip
+                  contentStyle={{ backgroundColor: '#0f172a', color: '#fff', borderRadius: '12px', fontSize: '11px' }}
+                />
+                <Bar dataKey="activeCases" name="Active Case Volume" fill="#0d9488" radius={[8, 8, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
