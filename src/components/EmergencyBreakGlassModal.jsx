@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { ShieldAlert, AlertOctagon, HeartPulse, AlertTriangle, Pill, X, CheckCircle2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../context/AuthContext';
+import { db } from '../firebase';
+import { collection, query, where, getDocs, addDoc } from 'firebase/firestore';
 
 export const EmergencyBreakGlassModal = ({ isOpen, onClose, initialAnvayId = '' }) => {
   const { t } = useTranslation();
@@ -26,27 +28,41 @@ export const EmergencyBreakGlassModal = ({ isOpen, onClose, initialAnvayId = '' 
     setError(null);
 
     try {
-      const res = await fetch('/api/emergency/break-glass-access', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          anvayId,
-          emergencyReason,
-          attendingDoctorName: user?.name
-        })
+      const qPatient = query(collection(db, 'users'), where('anvayId', '==', anvayId.trim().toUpperCase()));
+      const snap = await getDocs(qPatient);
+      if (snap.empty) {
+        setError('Patient record not found for this ANVAY ID.');
+        return;
+      }
+      const pData = snap.docs[0].data();
+
+      // Log into immutable auditLogs collection
+      await addDoc(collection(db, 'auditLogs'), {
+        action: 'EMERGENCY_BREAK_GLASS',
+        actorId: user?.uid || 'anonymous',
+        actorName: user?.name || 'Emergency Attending Physician',
+        actorRole: user?.role || 'Doctor',
+        patientAnvayId: anvayId.trim().toUpperCase(),
+        hospitalId: user?.hospitalId || '',
+        hospitalName: user?.hospitalName || 'Emergency Center',
+        severity: 'HIGH_ALERT',
+        details: `Emergency Break-Glass access triggered: "${emergencyReason.trim()}"`,
+        timestamp: new Date().toISOString()
       });
 
-      const data = await res.json();
-      if (data.success) {
-        setEmergencyPayload(data.emergencyPayload);
-      } else {
-        setError(data.message || 'Failed to authorize break-glass access.');
-      }
+      setEmergencyPayload({
+        anvayId: pData.anvayId,
+        fullName: pData.fullName || pData.name,
+        gender: pData.gender || 'Unknown',
+        age: pData.age || pData.dateOfBirth || 'N/A',
+        bloodGroup: pData.bloodGroup || 'O+',
+        criticalAllergies: pData.allergies || [],
+        activeMedications: pData.activeMedicines || pData.medications || [],
+        attendingPhysician: user?.name || 'Emergency Attending Physician'
+      });
     } catch (err) {
-      setError('Network or server error during break-glass authorization.');
+      console.error('Error during break glass access:', err);
+      setError('Network or permission error during break-glass authorization.');
     } finally {
       setLoading(false);
     }

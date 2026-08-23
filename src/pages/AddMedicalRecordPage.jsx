@@ -4,6 +4,8 @@ import { FilePlus, ShieldCheck, Building2, User, Stethoscope, CheckCircle2, Arro
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../context/AuthContext';
 import { VerifiedDoctorBadge } from '../components/VerifiedDoctorBadge';
+import { db } from '../firebase';
+import { collection, doc, setDoc, serverTimestamp } from 'firebase/firestore';
 
 export const AddMedicalRecordPage = () => {
   const { t } = useTranslation();
@@ -50,30 +52,29 @@ export const AddMedicalRecordPage = () => {
     }
 
     try {
-      const res = await fetch('/api/records/add', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          patientAnvayId: formData.patientAnvayId,
-          recordType: formData.recordType,
-          title: formData.title,
-          department: formData.department,
-          description: formData.description,
-          clinicalData
-        })
-      });
+      const newRecordRef = doc(collection(db, 'records'));
+      const recordData = {
+        recordId: newRecordRef.id,
+        patientId: formData.patientAnvayId.trim().toUpperCase(),
+        recordType: formData.recordType,
+        title: formData.title,
+        department: formData.department,
+        description: formData.description,
+        clinicalData,
+        doctorId: user?.uid || '',
+        doctorName: user?.name || 'Dr. Attending Clinician',
+        hospitalId: user?.hospitalId || '',
+        hospitalName: user?.hospitalName || 'Network Hospital',
+        documents: [],
+        createdAt: new Date().toISOString(),
+        timestamp: serverTimestamp()
+      };
 
-      const data = await res.json();
-      if (data.success) {
-        setSuccessRecord(data.record);
-      } else {
-        setError(data.message || 'Failed to add medical record');
-      }
+      await setDoc(newRecordRef, recordData);
+      setSuccessRecord(recordData);
     } catch (err) {
-      setError('Network error occurred.');
+      console.error(err);
+      setError(err.message || 'Failed to add medical record');
     } finally {
       setLoading(false);
     }

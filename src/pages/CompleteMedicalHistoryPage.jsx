@@ -23,6 +23,8 @@ import { VerifiedHospitalBadge } from '../components/VerifiedHospitalBadge';
 import { VersionDiffModal } from '../components/VersionDiffModal';
 import { DocumentViewerModal } from '../components/DocumentViewerModal';
 import { exportPatientMedicalSummary } from '../utils/pdfExport';
+import { db } from '../firebase';
+import { collection, query, where, getDocs, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 
 export const CompleteMedicalHistoryPage = () => {
   const { t } = useTranslation();
@@ -51,22 +53,40 @@ export const CompleteMedicalHistoryPage = () => {
     setLoading(true);
     setError(null);
     try {
-      let url = `/api/records/patient/${anvayId}?`;
-      if (selectedCategory !== 'All') url += `category=${encodeURIComponent(selectedCategory)}&`;
-      if (selectedHospital !== 'All') url += `hospitalId=${encodeURIComponent(selectedHospital)}&`;
-
-      const res = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const data = await res.json();
-      if (data.success) {
-        setPatient(data.patient);
-        setRecords(data.records);
-        setContributingHospitals(data.contributingHospitals || []);
-      } else {
-        setError(data.message || 'Medical history not found');
+      const idUpper = anvayId.trim().toUpperCase();
+      // 1. Fetch Patient
+      const qPatient = query(collection(db, 'users'), where('anvayId', '==', idUpper));
+      const pSnap = await getDocs(qPatient);
+      if (!pSnap.empty) {
+        setPatient(pSnap.docs[0].data());
       }
+
+      // 2. Fetch Records
+      const qRecs = query(collection(db, 'records'), where('patientId', '==', idUpper));
+      const rSnap = await getDocs(qRecs);
+      let allRecs = rSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      // Extract unique hospitals
+      const hospitalsMap = {};
+      allRecs.forEach(r => {
+        if (r.hospitalId && r.hospitalName) {
+          hospitalsMap[r.hospitalId] = { id: r.hospitalId, name: r.hospitalName };
+        }
+      });
+      setContributingHospitals(Object.values(hospitalsMap));
+
+      // Filter by category
+      if (selectedCategory !== 'All') {
+        allRecs = allRecs.filter(r => r.recordType === selectedCategory);
+      }
+      // Filter by hospital
+      if (selectedHospital !== 'All') {
+        allRecs = allRecs.filter(r => r.hospitalId === selectedHospital);
+      }
+
+      setRecords(allRecs);
     } catch (e) {
+      console.error('Error fetching history:', e);
       setError('Network error loading longitudinal history.');
     } finally {
       setLoading(false);
@@ -75,7 +95,7 @@ export const CompleteMedicalHistoryPage = () => {
 
   useEffect(() => {
     fetchHistory();
-  }, [anvayId, selectedCategory, selectedHospital, token]);
+  }, [anvayId, selectedCategory, selectedHospital]);
 
   const handleAmendSubmit = async (e) => {
     e.preventDefault();
@@ -88,29 +108,23 @@ export const CompleteMedicalHistoryPage = () => {
     setAmendError(null);
 
     try {
-      const res = await fetch(`/api/records/${amendModalRecord.recordId}/amend`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          reasonForChange: amendReason,
-          description: amendDescription || amendModalRecord.description
-        })
+      const recId = amendModalRecord.recordId || amendModalRecord.id;
+      const recRef = doc(db, 'records', recId);
+      await updateDoc(recRef, {
+        description: amendDescription || amendModalRecord.description,
+        isAmended: true,
+        amendReason: amendReason.trim(),
+        amendedBy: user?.name || 'Dr. Attending Clinician',
+        amendedAt: new Date().toISOString()
       });
 
-      const data = await res.json();
-      if (data.success) {
-        setAmendModalRecord(null);
-        setAmendReason('');
-        setAmendDescription('');
-        fetchHistory();
-      } else {
-        setAmendError(data.message || 'Failed to amend record');
-      }
+      setAmendModalRecord(null);
+      setAmendReason('');
+      setAmendDescription('');
+      fetchHistory();
     } catch (err) {
-      setAmendError('Network error submitting amendment.');
+      console.error('Error amending record:', err);
+      setAmendError(err.message || 'Error submitting amendment.');
     } finally {
       setAmendLoading(false);
     }

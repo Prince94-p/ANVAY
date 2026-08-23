@@ -4,7 +4,6 @@ import { useAuth } from './context/AuthContext';
 
 import { Navbar } from './components/Navbar';
 import { Sidebar } from './components/Sidebar';
-import { FloatingDemoSwitcher } from './components/FloatingDemoSwitcher';
 
 import { LandingPage } from './pages/LandingPage';
 import { LoginPage } from './pages/LoginPage';
@@ -45,10 +44,13 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
   }
 
   if (allowedRoles && !allowedRoles.includes(user?.role)) {
-    if (user?.role === 'Patient') return <Navigate to="/patient-dashboard" replace />;
-    if (user?.role === 'Government Admin') return <Navigate to="/government-dashboard" replace />;
-    if (user?.role === 'Super Admin') return <Navigate to="/super-admin" replace />;
-    return <Navigate to="/dashboard" replace />;
+    const role = user?.role;
+    if (role === 'Patient') return <Navigate to="/patient-dashboard" replace />;
+    if (role === 'Doctor') return <Navigate to="/doctor-dashboard" replace />;
+    if (role === 'Government Admin') return <Navigate to="/government-dashboard" replace />;
+    if (role === 'Super Admin') return <Navigate to="/super-admin" replace />;
+    if (role === 'Hospital Admin') return <Navigate to="/dashboard" replace />;
+    return <Navigate to="/" replace />;
   }
 
   return children;
@@ -59,8 +61,8 @@ export function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const location = useLocation();
 
-  const publicRoutes = ['/', '/login', '/register-hospital', '/verification-status'];
-  const isPublicPage = publicRoutes.includes(location.pathname);
+  const publicRoutes = ['/', '/login', '/register', '/register-hospital', '/verification-status'];
+  const isPublicPage = publicRoutes.includes(location.pathname) || location.pathname.startsWith('/register');
   const isPatient = user?.role === 'Patient';
 
   // Show sidebar on authenticated portal pages (for staff/hospital/govt/admin)
@@ -125,8 +127,6 @@ export function App() {
         </main>
       </div>
 
-      {/* Floating Demo Persona Switcher */}
-      <FloatingDemoSwitcher />
     </div>
   );
 }

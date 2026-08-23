@@ -2,40 +2,46 @@ import React, { useState, useEffect } from 'react';
 import { FileCheck, ShieldAlert, Filter, Clock, Building2, User, Activity, AlertTriangle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../context/AuthContext';
+import { db } from '../firebase';
+import { collection, query, onSnapshot, orderBy } from 'firebase/firestore';
 
 export const AuditLogsPage = () => {
   const { t } = useTranslation();
-  const { token, user } = useAuth();
+  const { user } = useAuth();
 
-  const [logs, setLogs] = useState([]);
+  const [allLogs, setAllLogs] = useState([]);
   const [filterSeverity, setFilterSeverity] = useState('All');
   const [filterAction, setFilterAction] = useState('All');
   const [loading, setLoading] = useState(true);
 
-  const fetchLogs = async () => {
-    setLoading(true);
-    try {
-      let url = `/api/audit?limit=100&`;
-      if (filterSeverity !== 'All') url += `severity=${encodeURIComponent(filterSeverity)}&`;
-      if (filterAction !== 'All') url += `action=${encodeURIComponent(filterAction)}&`;
-
-      const res = await fetch(url, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const data = await res.json();
-      if (data.success) {
-        setLogs(data.logs);
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
-    fetchLogs();
-  }, [filterSeverity, filterAction, token]);
+    const q = query(collection(db, 'auditLogs'));
+    const unsub = onSnapshot(q, (snapshot) => {
+      const logData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      // Sort in-memory by timestamp descending
+      logData.sort((a, b) => {
+        const tA = new Date(a.timestamp || 0).getTime();
+        const tB = new Date(b.timestamp || 0).getTime();
+        return tB - tA;
+      });
+      setAllLogs(logData);
+      setLoading(false);
+    }, (err) => {
+      console.warn('Error fetching audit logs:', err);
+      setLoading(false);
+    });
+
+    return () => unsub();
+  }, []);
+
+  const logs = allLogs.filter(log => {
+    if (filterSeverity !== 'All' && log.severity !== filterSeverity) return false;
+    if (filterAction !== 'All' && log.action && !log.action.toLowerCase().includes(filterAction.toLowerCase())) return false;
+    return true;
+  });
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto">

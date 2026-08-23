@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { functions } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
 
 export const HospitalRegistrationPage = () => {
   const { t } = useTranslation();
@@ -36,23 +38,29 @@ export const HospitalRegistrationPage = () => {
     setSuccessMsg(null);
 
     try {
-      const res = await fetch('/api/hospitals/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...formData,
-          departments: formData.departments.split(',').map(d => d.trim())
-        })
+      const registerHospital = httpsCallable(functions, 'registerHospital');
+      const result = await registerHospital({
+        email: formData.email,
+        password: formData.adminPassword,
+        username: formData.adminUsername,
+        hospitalName: formData.name,
+        type: formData.type,
+        address: formData.address,
+        district: formData.district,
+        state: formData.state,
+        phone: formData.contactPhone,
+        regNumber: formData.regNumber,
+        representative: formData.authorizedRepresentative
       });
 
-      const data = await res.json();
-      if (data.success) {
-        setSuccessMsg(data.message || 'Hospital registration submitted for Super Admin review.');
+      if (result.data?.success) {
+        setSuccessMsg(`Hospital registered successfully! Assigned Hospital ID: ${result.data.hospitalId}`);
       } else {
-        setError(data.message || 'Failed to submit hospital registration.');
+        setError('Failed to submit hospital registration.');
       }
     } catch (err) {
-      setError('Network error occurred during submission.');
+      console.error('Error during hospital registration:', err);
+      setError(err.message || 'Error occurred during registration submission.');
     } finally {
       setLoading(false);
     }

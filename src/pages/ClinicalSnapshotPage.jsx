@@ -20,6 +20,8 @@ import { useAuth } from '../context/AuthContext';
 import { CompletenessScoreGauge } from '../components/CompletenessScoreGauge';
 import { VerifiedDoctorBadge } from '../components/VerifiedDoctorBadge';
 import { exportPatientMedicalSummary } from '../utils/pdfExport';
+import { db } from '../firebase';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 
 export const ClinicalSnapshotPage = () => {
   const { t } = useTranslation();
@@ -37,24 +39,25 @@ export const ClinicalSnapshotPage = () => {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(`/api/patients/${anvayId}/snapshot`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const data = await res.json();
-        if (data.success) {
-          setSnapshotData(data.snapshot);
-        } else {
-          setError(data.message || 'Patient snapshot unavailable');
-        }
+        const idUpper = anvayId.trim().toUpperCase();
+        const qPatient = query(collection(db, 'users'), where('anvayId', '==', idUpper));
+        const pSnap = await getDocs(qPatient);
 
-        const recRes = await fetch(`/api/records/patient/${anvayId}`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const recData = await recRes.json();
-        if (recData.success) {
-          setPatientRecords(recData.records);
+        if (!pSnap.empty) {
+          const pData = pSnap.docs[0].data();
+          const qRecs = query(collection(db, 'records'), where('patientId', '==', idUpper));
+          const recSnap = await getDocs(qRecs);
+          const recs = recSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          setPatientRecords(recs);
+          setSnapshotData({
+            patient: pData,
+            lastVisit: recs.length > 0 ? recs[0] : null
+          });
+        } else {
+          setError('Patient snapshot unavailable for ANVAY ID: ' + anvayId);
         }
       } catch (err) {
+        console.error('Error fetching snapshot:', err);
         setError('Network error fetching snapshot.');
       } finally {
         setLoading(false);
@@ -62,7 +65,7 @@ export const ClinicalSnapshotPage = () => {
     };
 
     fetchSnapshot();
-  }, [anvayId, token]);
+  }, [anvayId]);
 
   if (loading) {
     return <div className="p-12 text-center text-[#667085] text-xs">Loading patient clinical snapshot...</div>;

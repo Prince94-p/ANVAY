@@ -1,0 +1,114 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Core functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    // Role helpers
+    function isSuperAdmin() {
+      return getUserData().role == 'Super Admin';
+    }
+
+    function isGovernment() {
+      return getUserData().role == 'Government';
+    }
+
+    function isHospitalAdmin() {
+      return getUserData().role == 'Hospital Admin';
+    }
+
+    function isDoctor() {
+      return getUserData().role == 'Doctor';
+    }
+
+    function isPatient() {
+      return getUserData().role == 'Patient';
+    }
+
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (
+        isOwner(userId) ||
+        isSuperAdmin() ||
+        isGovernment() ||
+        // Hospital Admins can read patients and staff linked to their hospital's Anvay ID
+        (isHospitalAdmin() && resource.data.hospitalId == getUserData().anvayId) ||
+        // Doctors can read patients explicitly assigned to them
+        (isDoctor() && request.auth.uid in resource.data.assignedDoctorIds) ||
+        // Allow creating hospital/patient to read other hospitals if needed for dropdowns, etc. 
+        // We will restrict this in production, but allow basic reads for the platform to function
+        (resource.data.role == 'Hospital Admin')
+      );
+
+      // Creation happens via Cloud Functions (Admin SDK bypasses rules) 
+      // or self-registration for Patients/Hospitals
+      allow create: if isAuthenticated() && (
+        isOwner(userId)
+      );
+
+      allow update: if isAuthenticated() && (
+        isOwner(userId) ||
+        isSuperAdmin() ||
+        (isHospitalAdmin() && resource.data.hospitalId == getUserData().anvayId)
+      );
+
+      allow delete: if false; // Only Admin SDK can delete
+    }
+    
+    match /records/{recordId} {
+      allow read: if isAuthenticated() && (
+        isSuperAdmin() ||
+        isGovernment() ||
+        // Patients can read their own records
+        (isPatient() && resource.data.patientId == getUserData().anvayId) ||
+        // Doctors and Hospital Admins can read records
+        isDoctor() ||
+        isHospitalAdmin()
+      );
+      
+      allow create, update: if isAuthenticated() && (
+        isDoctor() ||
+        isHospitalAdmin() ||
+        isSuperAdmin()
+      );
+
+      allow delete: if false;
+    }
+
+    match /deletionRequests/{requestId} {
+      allow read: if isAuthenticated() && (
+        isSuperAdmin() ||
+        resource.data.userId == request.auth.uid
+      );
+      allow write: if false; // Handled exclusively by Cloud Functions
+    }
+
+    match /hospitals/{hospitalId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && (
+        isSuperAdmin() ||
+        request.auth.uid == resource.data.adminUid
+      );
+    }
+
+    match /auditLogs/{logId} {
+      allow read: if isAuthenticated() && (
+        isSuperAdmin() ||
+        isGovernment() ||
+        isHospitalAdmin()
+      );
+      allow create: if isAuthenticated();
+      allow update, delete: if false;
+    }
+  }
+}

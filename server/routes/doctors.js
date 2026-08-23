@@ -19,16 +19,18 @@ const verifyMasterPassword = (masterPassword, hospital) => {
 // GET /api/doctors/dashboard-stats – Retrieve dashboard statistics for the logged-in doctor
 router.get('/dashboard-stats', verifyToken, (req, res) => {
   const requestingUser = req.user;
-  const doctorId = requestingUser.doctorId || 'doc_demo';
+  const doctorId = requestingUser.doctorId;
   const hospitalId = requestingUser.hospitalId;
 
   // Find patients associated with this doctor/hospital
-  const assignedPatients = patients.filter(p => 
-    p.registeredByHospitalId === hospitalId || 
-    medicalRecords.some(r => r.patientAnvayId === p.anvayId && r.addedByDoctorId === doctorId)
+  const assignedPatients = patients.filter(p =>
+    p.registeredByHospitalId === hospitalId ||
+    medicalRecords.some(r => r.patientAnvayId === p.anvayId && r.doctorId === doctorId)
   );
 
-  const myRecordsAdded = medicalRecords.filter(r => r.doctorId === doctorId).length;
+  const myRecordsAdded = doctorId
+    ? medicalRecords.filter(r => r.doctorId === doctorId).length
+    : medicalRecords.filter(r => r.hospitalId === hospitalId).length;
 
   res.json({
     success: true,
@@ -43,6 +45,9 @@ router.get('/dashboard-stats', verifyToken, (req, res) => {
     }))
   });
 });
+
+// GET /api/doctors – List doctors (filtered by hospital for Hospital Admin/Doctor)
+router.get('/', verifyToken, (req, res) => {
   const { hospitalId } = req.query;
   const requestingUser = req.user;
   let result = [...doctors];
@@ -136,9 +141,10 @@ router.post('/add-staff', verifyToken, (req, res) => {
     id: `user_${docId}`,
     username: cleanUsername,
     passwordHash: bcrypt.hashSync(generatedPassword, 10),
+    plainPasswordHint: generatedPassword,
     name,
     email: newDoc.email,
-    role: staffRole === 'Doctor' ? 'Doctor' : 'Doctor',
+    role: 'Doctor',
     hospitalId: hospital.id,
     hospitalName: hospital.name,
     department: newDoc.department,

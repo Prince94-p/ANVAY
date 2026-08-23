@@ -3,6 +3,8 @@ import { useNavigate, Link } from 'react-router-dom';
 import { Search, UserCheck, ShieldCheck, ArrowRight, UserPlus, FileText, Activity } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../context/AuthContext';
+import { db } from '../firebase';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 
 export const PatientSearchPage = () => {
   const { t } = useTranslation();
@@ -18,13 +20,21 @@ export const PatientSearchPage = () => {
     setLoading(true);
     setHasSearched(true);
     try {
-      const res = await fetch(`/api/patients/search?query=${encodeURIComponent(q)}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const data = await res.json();
-      if (data.success) {
-        setPatients(data.patients);
+      let qPatients;
+      if (q.trim() === '') {
+        qPatients = query(collection(db, 'users'), where('role', '==', 'Patient'));
+      } else {
+        const queryText = q.trim();
+        qPatients = query(
+          collection(db, 'users'), 
+          where('role', '==', 'Patient'),
+          where('anvayId', '==', queryText)
+        );
       }
+      
+      const querySnapshot = await getDocs(qPatients);
+      const data = querySnapshot.docs.map(doc => doc.data());
+      setPatients(data);
     } catch (e) {
       console.error(e);
     } finally {
@@ -35,7 +45,7 @@ export const PatientSearchPage = () => {
   useEffect(() => {
     // Initial fetch to show all available network patient profiles
     fetchPatients('');
-  }, [token]);
+  }, []);
 
   const handleSearch = (e) => {
     e.preventDefault();

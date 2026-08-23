@@ -103,13 +103,21 @@ export const Navbar = ({ onToggleSidebar, isPublicPage }) => {
               <div className="flex items-center gap-3 pl-3 border-l border-[#e7edf4]">
                 <div className="text-right hidden sm:block">
                   <div className="flex items-center justify-end gap-1.5">
-                    <span className="text-xs font-bold text-[#101828]">{user?.name}</span>
+                    <span className="text-xs font-bold text-[#101828]">{user?.fullName || user?.name}</span>
                     {user?.hospitalId && <VerifiedHospitalBadge status="Approved" size="sm" />}
                   </div>
                   <span className="text-[11px] text-[#667085] font-medium">
                     {user?.hospitalName || user?.role}
                   </span>
                 </div>
+
+                {user?.photoURL ? (
+                  <img src={user.photoURL} alt="Profile" className="w-8 h-8 rounded-full object-cover border border-[#e2eaf1]" />
+                ) : (
+                  <div className="w-8 h-8 rounded-full bg-[#0f6d8e] text-white flex items-center justify-center text-xs font-bold border border-[#0b5874]">
+                    {(user?.fullName || user?.name || 'U').charAt(0).toUpperCase()}
+                  </div>
+                )}
 
                 <button
                   onClick={handleLogout}

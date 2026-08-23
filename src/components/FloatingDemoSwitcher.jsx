@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Sparkles, Users, ChevronUp, ChevronDown, Check, User, Building2, Stethoscope, Landmark, Shield } from 'lucide-react';
+import { ChevronUp, ChevronDown, Check, User, Building2, Stethoscope, Landmark, Shield, Loader2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 export const FloatingDemoSwitcher = () => {
   const { user, switchDemoPersona } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
+  const [switching, setSwitching] = useState(null);
+  const [switchError, setSwitchError] = useState(null);
   const navigate = useNavigate();
 
   const personas = [
@@ -24,7 +26,7 @@ export const FloatingDemoSwitcher = () => {
       role: 'Doctor',
       institution: 'Metro Super Specialty (Delhi)',
       icon: Stethoscope,
-      targetRoute: '/dashboard',
+      targetRoute: '/doctor-dashboard',
       color: 'bg-teal-50 text-[#0f6d8e]'
     },
     {
@@ -33,7 +35,7 @@ export const FloatingDemoSwitcher = () => {
       role: 'Doctor',
       institution: 'Apex Care Institute (Mumbai)',
       icon: Stethoscope,
-      targetRoute: '/dashboard',
+      targetRoute: '/doctor-dashboard',
       color: 'bg-cyan-50 text-[#20a7ce]'
     },
     {
@@ -42,7 +44,7 @@ export const FloatingDemoSwitcher = () => {
       role: 'Doctor',
       institution: 'Kerala Medical Trust (Kochi)',
       icon: Stethoscope,
-      targetRoute: '/dashboard',
+      targetRoute: '/doctor-dashboard',
       color: 'bg-sky-50 text-[#0b5874]'
     },
     {
@@ -74,11 +76,26 @@ export const FloatingDemoSwitcher = () => {
     }
   ];
 
+  const getDashboardRoute = (role) => {
+    if (role === 'Patient') return '/patient-dashboard';
+    if (role === 'Doctor') return '/doctor-dashboard';
+    if (role === 'Hospital Admin') return '/dashboard';
+    if (role === 'Government Admin') return '/government-dashboard';
+    if (role === 'Super Admin') return '/super-admin';
+    return '/';
+  };
+
   const handleSwitch = async (p) => {
+    setSwitching(p.username);
+    setSwitchError(null);
     const res = await switchDemoPersona(p.username);
+    setSwitching(null);
     if (res.success) {
-      navigate(p.targetRoute);
+      const route = getDashboardRoute(res.user?.role || p.role);
+      navigate(route);
       setIsOpen(false);
+    } else {
+      setSwitchError(res.message || 'Switch failed');
     }
   };
 
@@ -108,21 +125,28 @@ export const FloatingDemoSwitcher = () => {
         {/* Expanded Persona List */}
         {isOpen && (
           <div className="p-2 space-y-1 max-h-72 overflow-y-auto border-t border-slate-800">
+            {switchError && (
+              <div className="px-2 py-1 text-[10px] text-red-400 bg-red-900/30 rounded">{switchError}</div>
+            )}
             {personas.map((p) => {
               const Icon = p.icon;
               const isActive = user?.username === p.username;
+              const isSwitching = switching === p.username;
 
               return (
                 <button
                   key={p.username}
                   onClick={() => handleSwitch(p)}
+                  disabled={!!switching}
                   className={`w-full p-2 rounded-[10px] text-left transition flex items-center justify-between text-xs ${
                     isActive ? 'bg-[#0f6d8e] text-white' : 'hover:bg-slate-800 text-slate-200'
-                  }`}
+                  } ${switching && !isSwitching ? 'opacity-50' : ''}`}
                 >
                   <div className="flex items-center gap-2.5">
                     <div className={`w-7 h-7 rounded-full flex items-center justify-center font-bold text-[10px] ${p.color}`}>
-                      <Icon className="w-3.5 h-3.5" />
+                      {isSwitching
+                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        : <Icon className="w-3.5 h-3.5" />}
                     </div>
                     <div>
                       <strong className="block text-[11px]">{p.name}</strong>
@@ -130,7 +154,7 @@ export const FloatingDemoSwitcher = () => {
                     </div>
                   </div>
 
-                  {isActive && <Check className="w-4 h-4 text-emerald-400" />}
+                  {isActive && !isSwitching && <Check className="w-4 h-4 text-emerald-400" />}
                 </button>
               );
             })}

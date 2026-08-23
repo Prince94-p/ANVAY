@@ -2,41 +2,49 @@ import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../context/AuthContext';
 import { Link } from 'react-router-dom';
-import { Users, FileText, Activity, Clock } from 'lucide-react';
+import { Users, FileText, Activity, Trash2 } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
+import { db } from '../firebase';
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { AccountDeletionModal } from '../components/AccountDeletionModal';
 
 export const DoctorDashboard = () => {
   const { t } = useTranslation();
-  const { user, token } = useAuth();
-  const [stats, setStats] = useState(null);
+  const { user } = useAuth();
+  
+  const [assignedPatients, setAssignedPatients] = useState([]);
+  const [myRecordsAdded, setMyRecordsAdded] = useState(0);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fetchStats = async () => {
-      try {
-        const res = await fetch('/api/doctors/dashboard-stats', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const data = await res.json();
-        if (data.success) {
-          setStats(data);
-        }
-      } catch (err) {
-        console.error('Error fetching dashboard stats:', err);
-      } finally {
-        setLoading(false);
-      }
+    if (!user?.uid) return;
+
+    // Real-time listener for assigned patients
+    const qPatients = query(collection(db, 'users'), where('role', '==', 'Patient'), where('assignedDoctorIds', 'array-contains', user.uid));
+    const unsubscribePatients = onSnapshot(qPatients, (snapshot) => {
+      setAssignedPatients(snapshot.docs.map(doc => doc.data()));
+    });
+
+    // Real-time listener for doctor's records
+    const qRecords = query(collection(db, 'records'), where('doctorId', '==', user.uid));
+    const unsubscribeRecords = onSnapshot(qRecords, (snapshot) => {
+      setMyRecordsAdded(snapshot.size);
+    });
+
+    setLoading(false);
+
+    return () => {
+      unsubscribePatients();
+      unsubscribeRecords();
     };
-    fetchStats();
-  }, [token]);
+  }, [user]);
 
   if (loading) {
     return <div className="p-8 text-center text-xs text-slate-500">Loading doctor dashboard data...</div>;
   }
 
-  const assignedPatients = stats?.assignedPatients || [];
-  const totalPatientsSeen = stats?.totalPatients || 0;
-  const myRecordsAdded = stats?.myRecordsAdded || 0;
+  const totalPatientsSeen = assignedPatients.length;
 
   const departmentData = [
     { name: 'Cardiology', value: 45 },
@@ -48,13 +56,22 @@ export const DoctorDashboard = () => {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-extrabold text-[#101828] tracking-tight">
-          {t('doctorDashboard.title')}
-        </h1>
-        <p className="text-[#667085] text-[13px] font-medium mt-1">
-          {t('doctorDashboard.subtitle')}
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-extrabold text-[#101828] tracking-tight">
+            {t('doctorDashboard.title')} - {user?.name}
+          </h1>
+          <p className="text-[#667085] text-[13px] font-medium mt-1">
+            {t('doctorDashboard.subtitle')}
+          </p>
+        </div>
+        <button
+          onClick={() => setIsDeleteModalOpen(true)}
+          className="self-start sm:self-auto px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-[9px] text-xs font-bold transition flex items-center gap-1.5"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+          <span>Delete Account</span>
+        </button>
       </div>
 
       {/* KPI Cards */}
@@ -110,8 +127,8 @@ export const DoctorDashboard = () => {
                   {assignedPatients.map(p => (
                     <tr key={p.anvayId} className="hover:bg-[#f8fbff] transition-colors">
                       <td className="px-5 py-3">
-                        <div className="font-bold text-[#101828]">{p.fullName}</div>
-                        <div className="text-[11px] text-[#667085]">{p.age} Yrs • {p.gender}</div>
+                        <div className="font-bold text-[#101828]">{p.name || p.fullName}</div>
+                        <div className="text-[11px] text-[#667085]">DOB: {p.dateOfBirth} • {p.gender}</div>
                       </td>
                       <td className="px-5 py-3 font-mono text-[#0f6d8e] text-xs font-semibold">
                         {p.anvayId}
@@ -165,6 +182,11 @@ export const DoctorDashboard = () => {
           </div>
         </div>
       </div>
+
+      <AccountDeletionModal
+        isOpen={isDeleteModalOpen}
+        onClose={() => setIsDeleteModalOpen(false)}
+      />
     </div>
   );
 };

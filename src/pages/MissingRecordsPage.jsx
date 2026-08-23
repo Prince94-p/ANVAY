@@ -15,42 +15,28 @@ import {
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../context/AuthContext';
 import { CompletenessScoreGauge } from '../components/CompletenessScoreGauge';
+import { db } from '../firebase';
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
 
 export const MissingRecordsPage = () => {
   const { t } = useTranslation();
-  const { token } = useAuth();
+  const { user } = useAuth();
   const [patients, setPatients] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fetchPatientsWithGaps = async () => {
-      try {
-        const res = await fetch('/api/patients/search?query=', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const data = await res.json();
-        if (data.success) {
-          // Fetch full snapshot for each to get detailed completeness
-          const detailed = await Promise.all(
-            data.patients.map(async (p) => {
-              const sRes = await fetch(`/api/patients/${p.anvayId}/snapshot`, {
-                headers: { 'Authorization': `Bearer ${token}` }
-              });
-              const sData = await sRes.json();
-              return sData.success ? sData.snapshot.patient : p;
-            })
-          );
-          setPatients(detailed);
-        }
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoading(false);
-      }
-    };
+    const q = query(collection(db, 'users'), where('role', '==', 'Patient'));
+    const unsub = onSnapshot(q, (snapshot) => {
+      const pList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setPatients(pList);
+      setLoading(false);
+    }, (err) => {
+      console.warn('Error loading patients:', err);
+      setLoading(false);
+    });
 
-    fetchPatientsWithGaps();
-  }, [token]);
+    return () => unsub();
+  }, []);
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto">

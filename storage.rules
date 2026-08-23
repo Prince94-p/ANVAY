@@ -1,0 +1,32 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Helper to check if user is logged in
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Helper to check if requester is a Super Admin
+    function isSuperAdmin() {
+      return isSignedIn() && 
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'Super Admin';
+    }
+
+    // Profile photos rules
+    match /users/{userId}/{allPaths=**} {
+      allow read: if true;
+      allow write: if isSignedIn() && (request.auth.uid == userId || isSuperAdmin());
+    }
+
+    // Hospital gallery photos rules
+    match /hospitals/{hospitalId}/gallery/{fileName} {
+      allow read: if true;
+      // Allow upload/delete if the user is the hospital itself, has the hospital's ID, or is a Super Admin
+      allow write: if isSignedIn() && (
+        request.auth.uid == hospitalId || 
+        firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.hospitalId == hospitalId ||
+        isSuperAdmin()
+      );
+    }
+  }
+}

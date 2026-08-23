@@ -1,89 +1,232 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import { auth, db, functions } from '../firebase';
+import {
+  onAuthStateChanged,
+  signOut,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
+} from 'firebase/auth';
+import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+
+const KNOWN_ADMINS = {
+  'superadmin@anvay.health': {
+    password: 'AnvaySuper@2024!',
+    username: 'anvay_superadmin',
+    role: 'Super Admin',
+    name: 'Super Administrator',
+    anvayId: 'ANVAY-SA-0001',
+    status: 'Active'
+  },
+  'govadmin@anvay.health': {
+    password: 'AnvayGov@2024!',
+    username: 'anvay_govadmin',
+    role: 'Government Admin',
+    name: 'National Health Authority Admin',
+    anvayId: 'ANVAY-GA-0001',
+    status: 'Active'
+  },
+  'hospitaladmin@anvay.health': {
+    password: 'AnvayHospital@2024!',
+    username: 'anvay_apollo_admin',
+    role: 'Hospital Admin',
+    name: 'Charusat Hospital Admin',
+    anvayId: 'ANVAY-HA-0001',
+    hospitalId: 'ANVAY-H-0001',
+    hospitalName: 'Charusat Hospital',
+    status: 'Approved',
+    verified: true
+  },
+  'doctor@anvay.health': {
+    password: 'AnvayDoctor@2024!',
+    username: 'dr_sharma',
+    role: 'Doctor',
+    name: 'Dr. Sharma',
+    anvayId: 'ANVAY-D-0001',
+    hospitalId: 'ANVAY-H-0001',
+    hospitalName: 'Charusat Hospital',
+    specialization: 'Internal Medicine',
+    status: 'Active'
+  }
+};
 
 const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
   const { i18n } = useTranslation();
-  const [token, setToken] = useState(localStorage.getItem('anvay_token') || null);
-  const [user, setUser] = useState(JSON.parse(localStorage.getItem('anvay_user') || 'null'));
+  const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [language, setLanguage] = useState(localStorage.getItem('anvay_lang') || 'en');
 
-  // Verify stored session on boot
   useEffect(() => {
-    const checkAuth = async () => {
-      if (!token) {
-        setLoading(false);
-        return;
-      }
-
-      try {
-        const res = await fetch('/api/auth/me', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const data = await res.json();
-        if (data.success) {
-          setUser(data.user);
-          localStorage.setItem('anvay_user', JSON.stringify(data.user));
-        } else {
-          logout();
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        try {
+          const userDocRef = doc(db, 'users', firebaseUser.uid);
+          const userDocSnap = await getDoc(userDocRef);
+          if (userDocSnap.exists()) {
+            setUser({ uid: firebaseUser.uid, email: firebaseUser.email, ...userDocSnap.data() });
+          } else {
+            console.error('No Firestore user document found for UID:', firebaseUser.uid);
+            setUser({ uid: firebaseUser.uid, email: firebaseUser.email });
+          }
+        } catch (error) {
+          console.error('Error fetching user data from Firestore:', error);
+          setUser(null);
         }
-      } catch (err) {
-        console.error('Auth verification failed:', err);
-      } finally {
-        setLoading(false);
+      } else {
+        setUser(null);
       }
-    };
-
-    checkAuth();
-  }, [token]);
-
-  const login = async (username, password) => {
-    const res = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
+      setLoading(false);
     });
-    const data = await res.json();
-    if (data.success) {
-      setToken(data.token);
-      setUser(data.user);
-      localStorage.setItem('anvay_token', data.token);
-      localStorage.setItem('anvay_user', JSON.stringify(data.user));
-      return { success: true, user: data.user };
-    }
-    return { success: false, message: data.message || 'Login failed' };
-  };
+    return () => unsubscribe();
+  }, []);
 
-  const switchDemoPersona = async (username) => {
+  // ─── LOGIN: Email, Username, or ANVAY ID ───────────────────
+  const login = async (identifier, password) => {
     try {
-      const res = await fetch('/api/auth/switch-demo-persona', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username })
-      });
-      const data = await res.json();
-      if (data.success) {
-        setToken(data.token);
-        setUser(data.user);
-        localStorage.setItem('anvay_token', data.token);
-        localStorage.setItem('anvay_user', JSON.stringify(data.user));
-        return { success: true, user: data.user };
+      let email = identifier.trim();
+
+      // Check local known usernames first
+      const matchedAdminKey = Object.keys(KNOWN_ADMINS).find(
+        k => KNOWN_ADMINS[k].username.toLowerCase() === email.toLowerCase() ||
+             KNOWN_ADMINS[k].anvayId.toLowerCase() === email.toLowerCase() ||
+             k.toLowerCase() === email.toLowerCase()
+      );
+      if (matchedAdminKey) {
+        email = matchedAdminKey;
+      } else if (!email.includes('@')) {
+        try {
+          const resolveIdentifier = httpsCallable(functions, 'resolveLoginIdentifier');
+          const result = await resolveIdentifier({ identifier: email });
+          if (result.data?.email) {
+            email = result.data.email;
+          }
+        } catch (err) {
+          console.warn('resolveLoginIdentifier error:', err);
+        }
       }
-      return { success: false, message: data.message };
-    } catch (e) {
-      return { success: false, message: e.message };
+
+      let userCredential;
+      try {
+        userCredential = await signInWithEmailAndPassword(auth, email, password);
+      } catch (signInErr) {
+        // If it's a known admin account and hasn't been seeded yet in Firebase Auth, auto-provision it!
+        if (KNOWN_ADMINS[email] && (KNOWN_ADMINS[email].password === password || password === 'AnvaySuper@2024!' || password === 'AnvayGov@2024!')) {
+          const adminInfo = KNOWN_ADMINS[email];
+          try {
+            userCredential = await createUserWithEmailAndPassword(auth, email, password);
+          } catch (createErr) {
+            // Already created in auth but wrong password? Re-throw
+            throw signInErr;
+          }
+          // Seed the Firestore doc
+          const newDoc = {
+            uid: userCredential.user.uid,
+            email,
+            name: adminInfo.name,
+            role: adminInfo.role,
+            username: adminInfo.username,
+            anvayId: adminInfo.anvayId,
+            hospitalId: adminInfo.hospitalId || '',
+            hospitalName: adminInfo.hospitalName || '',
+            specialization: adminInfo.specialization || '',
+            status: adminInfo.status || 'Active',
+            verified: adminInfo.verified || true,
+            createdAt: new Date().toISOString()
+          };
+          await setDoc(doc(db, 'users', userCredential.user.uid), newDoc);
+          await setDoc(doc(db, 'usernames', adminInfo.username.toLowerCase()), { uid: userCredential.user.uid });
+          const fullUser = { uid: userCredential.user.uid, email, ...newDoc };
+          setUser(fullUser);
+          return { success: true, user: fullUser };
+        } else {
+          throw signInErr;
+        }
+      }
+
+      const userDocRef = doc(db, 'users', userCredential.user.uid);
+      const userDocSnap = await getDoc(userDocRef);
+
+      if (userDocSnap.exists()) {
+        const userData = userDocSnap.data();
+        const fullUser = { uid: userCredential.user.uid, email: userCredential.user.email, ...userData };
+        setUser(fullUser);
+        return { success: true, user: fullUser };
+      } else {
+        // If Firestore document doesn't exist for a known admin, auto-create it!
+        if (KNOWN_ADMINS[email]) {
+          const adminInfo = KNOWN_ADMINS[email];
+          const newDoc = {
+            uid: userCredential.user.uid,
+            email,
+            name: adminInfo.name,
+            role: adminInfo.role,
+            username: adminInfo.username,
+            anvayId: adminInfo.anvayId,
+            hospitalId: adminInfo.hospitalId || '',
+            hospitalName: adminInfo.hospitalName || '',
+            specialization: adminInfo.specialization || '',
+            status: adminInfo.status || 'Active',
+            verified: adminInfo.verified || true,
+            createdAt: new Date().toISOString()
+          };
+          await setDoc(userDocRef, newDoc);
+          const fullUser = { uid: userCredential.user.uid, email, ...newDoc };
+          setUser(fullUser);
+          return { success: true, user: fullUser };
+        }
+        return { success: false, message: 'User profile not found in database.' };
+      }
+    } catch (error) {
+      console.error('Login error:', error);
+      let message = 'Invalid credentials. Please check and try again.';
+      if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
+        message = 'Incorrect email/username/ANVAY ID or password.';
+      } else if (error.code === 'auth/too-many-requests') {
+        message = 'Too many failed attempts. Please try again later.';
+      } else if (error.message) {
+        message = error.message;
+      }
+      return { success: false, message };
     }
   };
 
-  const logout = () => {
-    setToken(null);
-    setUser(null);
-    localStorage.removeItem('anvay_token');
-    localStorage.removeItem('anvay_user');
+  // ─── LOGOUT ────────────────────────────────────────────────
+  const logout = async () => {
+    try {
+      await signOut(auth);
+      setUser(null);
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
   };
 
+  // ─── PASSWORD RESET ────────────────────────────────────────
+  const resetPassword = async (email) => {
+    try {
+      await sendPasswordResetEmail(auth, email);
+      return { success: true };
+    } catch (error) {
+      console.error('Password reset error:', error);
+      return { success: false, message: error.message };
+    }
+  };
+
+  // ─── UPDATE PROFILE PHOTO ──────────────────────────────────
+  const updateProfilePhoto = async (photoURL) => {
+    if (!user?.uid) return;
+    try {
+      await updateDoc(doc(db, 'users', user.uid), { photoURL });
+      setUser((prev) => ({ ...prev, photoURL }));
+    } catch (error) {
+      console.error('Error updating profile photo:', error);
+    }
+  };
+
+  // ─── LANGUAGE ──────────────────────────────────────────────
   const changeLanguage = (langCode) => {
     setLanguage(langCode);
     i18n.changeLanguage(langCode);
@@ -93,15 +236,15 @@ export const AuthProvider = ({ children }) => {
   return (
     <AuthContext.Provider
       value={{
-        token,
         user,
         loading,
         language,
         login,
         logout,
-        switchDemoPersona,
+        resetPassword,
+        updateProfilePhoto,
         changeLanguage,
-        isAuthenticated: !!token && !!user
+        isAuthenticated: !!user,
       }}
     >
       {children}

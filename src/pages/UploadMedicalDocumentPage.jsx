@@ -12,6 +12,9 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../context/AuthContext';
+import { db, storage } from '../firebase';
+import { collection, query, where, getDocs, doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 export const UploadMedicalDocumentPage = () => {
   const { t } = useTranslation();
@@ -19,9 +22,7 @@ export const UploadMedicalDocumentPage = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
-  const initialAnvayId = searchParams.get('anvayId') || '';
-
-  const [anvayId, setAnvayId] = useState(initialAnvayId);
+  const [anvayId, setAnvayId] = useState(searchParams.get('anvayId') || '');
   const [patient, setPatient] = useState(null);
   const [patientLoading, setPatientLoading] = useState(false);
   const [patientError, setPatientError] = useState(null);
@@ -46,17 +47,16 @@ export const UploadMedicalDocumentPage = () => {
       setPatientLoading(true);
       setPatientError(null);
       try {
-        const res = await fetch(`/api/patients/${anvayId.trim()}/snapshot`, {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const data = await res.json();
-        if (data.success) {
-          setPatient(data.snapshot.patient);
+        const q = query(collection(db, 'users'), where('anvayId', '==', anvayId.trim().toUpperCase()));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          setPatient(snap.docs[0].data());
         } else {
           setPatient(null);
-          setPatientError(data.message || 'Patient not found');
+          setPatientError('Patient not found');
         }
       } catch (err) {
+        console.error('Error fetching patient:', err);
         setPatientError('Network error checking patient ID.');
       } finally {
         setPatientLoading(false);
@@ -64,7 +64,7 @@ export const UploadMedicalDocumentPage = () => {
     };
 
     fetchPatient();
-  }, [anvayId, token]);
+  }, [anvayId]);
 
   const handleFileChange = (e) => {
     if (e.target.files && e.target.files[0]) {
@@ -86,30 +86,44 @@ export const UploadMedicalDocumentPage = () => {
     setUploading(true);
     setUploadError(null);
 
-    const formData = new FormData();
-    formData.append('document', selectedFile);
-    formData.append('anvayId', patient.anvayId);
-    formData.append('title', documentTitle || `${category} - ${selectedFile.name}`);
-    formData.append('category', category);
-    formData.append('description', clinicalNotes || `Diagnostic ${category} uploaded by ${user?.name} at ${user?.hospitalName}`);
-
     try {
-      const res = await fetch('/api/records/upload-document', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        body: formData
-      });
+      // 1. Upload to Firebase Storage
+      const storagePath = `records/${patient.anvayId}/${Date.now()}_${selectedFile.name}`;
+      const storageRef = ref(storage, storagePath);
+      await uploadBytes(storageRef, selectedFile);
+      const fileUrl = await getDownloadURL(storageRef);
 
-      const data = await res.json();
-      if (data.success) {
-        setSuccessResult(data.record);
-      } else {
-        setUploadError(data.message || 'Upload failed');
-      }
+      const newDoc = {
+        fileName: selectedFile.name,
+        fileType: selectedFile.type || 'application/pdf',
+        fileSize: `${(selectedFile.size / 1024).toFixed(1)} KB`,
+        url: fileUrl,
+        uploadedAt: new Date().toISOString()
+      };
+
+      // 2. Create Firestore Record
+      const newRecordRef = doc(collection(db, 'records'));
+      const recordData = {
+        recordId: newRecordRef.id,
+        patientId: patient.anvayId,
+        recordType: category,
+        title: documentTitle || `${category} - ${selectedFile.name}`,
+        department: 'Diagnostics',
+        description: clinicalNotes || `Diagnostic ${category} uploaded by ${user?.name} at ${user?.hospitalName || 'Hospital'}`,
+        doctorId: user?.uid || '',
+        doctorName: user?.name || 'Dr. Attending Clinician',
+        hospitalId: user?.hospitalId || '',
+        hospitalName: user?.hospitalName || 'Network Hospital',
+        documents: [newDoc],
+        createdAt: new Date().toISOString(),
+        timestamp: serverTimestamp()
+      };
+
+      await setDoc(newRecordRef, recordData);
+      setSuccessResult(recordData);
     } catch (err) {
-      setUploadError('Network error during file upload.');
+      console.error(err);
+      setUploadError(err.message || 'Network error during file upload.');
     } finally {
       setUploading(false);
     }

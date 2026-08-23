@@ -3,32 +3,32 @@ import { ShieldCheck, Clock, CheckCircle2, AlertCircle, Building2, ExternalLink 
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../context/AuthContext';
 import { VerifiedHospitalBadge } from '../components/VerifiedHospitalBadge';
+import { db } from '../firebase';
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
 
 export const HospitalVerificationStatusPage = () => {
   const { t } = useTranslation();
-  const { token, user } = useAuth();
+  const { user } = useAuth();
   const [hospitals, setHospitals] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fetchHospitals = async () => {
-      try {
-        const res = await fetch('/api/hospitals', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const data = await res.json();
-        if (data.success) {
-          setHospitals(data.hospitals);
-        }
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoading(false);
-      }
-    };
+    const q = query(collection(db, 'users'), where('role', '==', 'Hospital Admin'));
+    const unsub = onSnapshot(q, (snapshot) => {
+      const hospData = snapshot.docs.map(d => ({
+        id: d.id,
+        verificationStatus: d.data().verificationStatus || (d.data().verified ? 'Approved' : 'Pending Verification'),
+        ...d.data()
+      }));
+      setHospitals(hospData);
+      setLoading(false);
+    }, (err) => {
+      console.error('Error fetching hospitals:', err);
+      setLoading(false);
+    });
 
-    fetchHospitals();
-  }, [token]);
+    return () => unsub();
+  }, []);
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto">

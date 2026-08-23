@@ -2,6 +2,10 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../context/AuthContext';
+import { db, functions, storage } from '../firebase';
+import { collection, query, where, getDocs, doc, updateDoc } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 export const CreatePatientPage = () => {
   const { t } = useTranslation();
@@ -52,20 +56,19 @@ export const CreatePatientPage = () => {
     setDuplicateWarning(null);
 
     try {
-      const res = await fetch(`/api/patients/check-duplicate-identity?govtIdRef=${encodeURIComponent(formData.aadhaar.trim())}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const data = await res.json();
-      if (data.success && data.isDuplicate) {
+      const qAadhaar = query(collection(db, 'users'), where('govtIdNumber', '==', formData.aadhaar.trim()));
+      const snap = await getDocs(qAadhaar);
+      if (!snap.empty) {
+        const existing = snap.docs[0].data();
         setDuplicateWarning({
-          message: data.message,
-          existingAnvayId: data.existingAnvayId,
-          existingPatientName: data.existingPatientName,
-          registeredAtHospital: data.registeredAtHospital
+          message: 'National identity already registered in ANVAY system.',
+          existingAnvayId: existing.anvayId,
+          existingPatientName: existing.name || existing.fullName,
+          registeredAtHospital: existing.hospitalName || 'Network Hospital'
         });
       }
     } catch (e) {
-      console.error(e);
+      console.error('Error checking duplicate:', e);
     } finally {
       setIsCheckingDuplicate(false);
     }
@@ -80,16 +83,6 @@ export const CreatePatientPage = () => {
 
     if (formData.password && formData.password !== formData.confirmPassword) {
       setError('Passwords do not match');
-      return;
-    }
-
-    if (!profilePhoto) {
-      setError('Patient profile photo is required.');
-      return;
-    }
-
-    if (!idDocument) {
-      setError('National ID Document upload is required.');
       return;
     }
 
@@ -115,41 +108,63 @@ export const CreatePatientPage = () => {
       status: 'Active'
     }] : [];
 
-    const fData = new FormData();
-    fData.append('govtIdRef', `ABHA-${formData.aadhaar || '8921-9921-4401'}`);
-    fData.append('fullName', fullName);
-    fData.append('dateOfBirth', formData.dateOfBirth);
-    fData.append('gender', formData.gender);
-    fData.append('bloodGroup', formData.bloodGroup);
-    fData.append('contactPhone', formData.mobile);
-    fData.append('email', formData.email);
-    fData.append('password', formData.password);
-    fData.append('emergencyContactName', formData.emergencyName);
-    fData.append('emergencyContactPhone', formData.emergencyNumber);
-    fData.append('district', formData.district);
-    fData.append('state', formData.state);
-    fData.append('initialAllergies', JSON.stringify(initialAllergies));
-    fData.append('initialConditions', JSON.stringify(initialConditions));
-    fData.append('profilePhoto', profilePhoto);
-    fData.append('idDocument', idDocument);
-
     try {
-      const res = await fetch('/api/patients/create', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        body: fData
+      const registerPatient = httpsCallable(functions, 'registerPatient');
+      const generatedUsername = (formData.email ? formData.email.split('@')[0] : `patient_${Date.now()}`).toLowerCase().replace(/[^a-z0-9_]/g, '');
+
+      const result = await registerPatient({
+        email: formData.email || `${generatedUsername}@patient.anvay.health`,
+        password: formData.password || 'Patient@1234',
+        username: generatedUsername,
+        fullName,
+        dateOfBirth: formData.dateOfBirth,
+        gender: formData.gender,
+        bloodGroup: formData.bloodGroup,
+        mobile: formData.mobile,
+        govtIdType: 'Aadhaar',
+        govtIdNumber: formData.aadhaar
       });
 
-      const data = await res.json();
-      if (data.success) {
-        setCreatedPatient(data.patient);
+      if (result.data?.success) {
+        const patientUid = result.data.uid;
+        const updates = {
+          fullName,
+          district: formData.district,
+          state: formData.state,
+          emergencyContactName: formData.emergencyName,
+          emergencyContactPhone: formData.emergencyNumber,
+          allergies: initialAllergies,
+          chronicConditions: initialConditions
+        };
+
+        if (user?.hospitalId) {
+          updates.registeredAtHospitalId = user.hospitalId;
+        }
+
+        // Upload Profile Photo & ID Doc to Storage if selected
+        if (profilePhoto) {
+          try {
+            const photoRef = ref(storage, `users/${patientUid}/profile.jpg`);
+            await uploadBytes(photoRef, profilePhoto);
+            updates.photoURL = await getDownloadURL(photoRef);
+          } catch (storageErr) {
+            console.warn('Profile photo upload error:', storageErr);
+          }
+        }
+
+        await updateDoc(doc(db, 'users', patientUid), updates);
+
+        setCreatedPatient({
+          anvayId: result.data.anvayId,
+          fullName,
+          email: formData.email
+        });
       } else {
-        setError(data.message || 'Failed to create patient profile');
+        setError('Failed to create patient profile');
       }
     } catch (err) {
-      setError('Network error occurred during patient creation');
+      console.error(err);
+      setError(err.message || 'Error occurred during patient creation');
     } finally {
       setLoading(false);
     }
@@ -330,6 +345,9 @@ export const CreatePatientPage = () => {
                     <input
                       type="tel"
                       name="mobile"
+                      maxLength={10}
+                      pattern="[0-9]{10}"
+                      onInput={e => e.target.value = e.target.value.replace(/\D/g, '')}
                       value={formData.mobile}
                       onChange={handleChange}
                       placeholder="9876543210"
@@ -465,6 +483,9 @@ export const CreatePatientPage = () => {
                   <input
                     type="tel"
                     name="emergencyNumber"
+                    maxLength={10}
+                    pattern="[0-9]{10}"
+                    onInput={e => e.target.value = e.target.value.replace(/\D/g, '')}
                     value={formData.emergencyNumber}
                     onChange={handleChange}
                     placeholder="10-digit mobile number"

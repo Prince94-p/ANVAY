@@ -9,16 +9,20 @@ export const LoginPage = () => {
   const { login } = useAuth();
   const navigate = useNavigate();
 
-  const [identifier, setIdentifier] = useState('dr_priya');
-  const [password, setPassword] = useState('password123');
+  const [identifier, setIdentifier] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [loginSuccess, setLoginSuccess] = useState(null); // { name, role, dashboardRoute }
 
-  const [showTempPassModal, setShowTempPassModal] = useState(false);
-  const [newTempPassword, setNewTempPassword] = useState('');
-  const [confirmTempPassword, setConfirmTempPassword] = useState('');
-  const [tempPassUsername, setTempPassUsername] = useState('');
+  const getDashboardRoute = (role) => {
+    if (role === 'Patient') return '/patient-dashboard';
+    if (role === 'Government Admin') return '/government-dashboard';
+    if (role === 'Super Admin') return '/super-admin';
+    if (role === 'Hospital Admin') return '/dashboard';
+    return '/doctor-dashboard'; // Doctor default
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -29,59 +33,22 @@ export const LoginPage = () => {
     setLoading(false);
 
     if (res.success) {
-      if (res.user.tempPassword) {
-        setTempPassUsername(res.user.username);
-        setShowTempPassModal(true);
-        return;
-      }
-      if (res.user.role === 'Patient') {
-        navigate('/patient-dashboard');
-      } else if (res.user.role === 'Government Admin') {
-        navigate('/government-dashboard');
-      } else if (res.user.role === 'Super Admin') {
-        navigate('/super-admin');
-      } else if (res.user.role === 'Hospital Admin') {
-        navigate('/dashboard');
-      } else {
-        navigate('/doctor-dashboard');
-      }
+      const route = getDashboardRoute(res.user.role);
+      setLoginSuccess({ name: res.user.name, role: res.user.role, dashboardRoute: route });
+      // Auto-navigate after short delay
+      setTimeout(() => navigate(route), 1800);
     } else {
       setError(res.message || 'Invalid credentials. Please verify your account identifier.');
     }
   };
 
-  const handleChangeTempPassword = async (e) => {
-    e.preventDefault();
-    if (newTempPassword !== confirmTempPassword) {
-      setError('Passwords do not match');
-      return;
-    }
-    setLoading(true);
-    try {
-      const res = await fetch('/api/auth/change-temp-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: tempPassUsername, newPassword: newTempPassword })
-      });
-      const data = await res.json();
-      if (data.success) {
-        setShowTempPassModal(false);
-        setError(null);
-        alert('Password changed successfully! Please log in with your new password.');
-        setIdentifier(tempPassUsername);
-        setPassword('');
-      } else {
-        setError(data.message || 'Error changing password');
-      }
-    } catch (err) {
-      setError('Network error');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
-    <div className="min-h-[calc(100vh-76px)] grid grid-cols-1 lg:grid-cols-[0.9fr_1.1fr] text-[#101828]">
+    <div className="min-h-[calc(100vh-76px)] grid grid-cols-1 lg:grid-cols-[0.9fr_1.1fr] text-[#101828] relative">
+      <Link to="/" className="absolute top-4 left-4 z-10 flex items-center gap-2 bg-white/20 hover:bg-white/30 text-white px-3 py-1.5 rounded-full text-xs font-bold transition backdrop-blur-md">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>
+        Back to Home
+      </Link>
+      
       {/* Left Info Panel */}
       <section className="p-12 lg:p-[75px_10%] flex items-center text-white anvay-gradient-brand">
         <div className="space-y-6">
@@ -133,6 +100,22 @@ export const LoginPage = () => {
             </p>
           </div>
 
+          {loginSuccess ? (
+            <div className="p-5 bg-green-50 border border-green-200 rounded-[14px] text-center space-y-3">
+              <div className="w-12 h-12 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto">
+                <ShieldCheck className="w-6 h-6" />
+              </div>
+              <h3 className="font-extrabold text-[#101828] text-lg">Welcome back, {loginSuccess.name}!</h3>
+              <p className="text-[#667085] text-xs">Signed in as <strong>{loginSuccess.role}</strong>. Redirecting...</p>
+              <button
+                onClick={() => navigate(loginSuccess.dashboardRoute)}
+                className="w-full h-[46px] bg-[#0f6d8e] hover:bg-[#0b5874] text-white font-bold rounded-[9px] text-sm transition"
+              >
+                Go to Dashboard →
+              </button>
+            </div>
+          ) : (
+            <>
           {error && (
             <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-[9px] font-medium">
               {error}
@@ -186,63 +169,46 @@ export const LoginPage = () => {
             </button>
           </form>
 
-          {/* Quick Demo Shortcuts */}
-          <div className="pt-3 border-t border-[#eef2f6] space-y-2">
-            <span className="text-[10px] font-bold text-[#98a2b3] uppercase tracking-wider block text-center">
-              {t('loginPage.quickLogins')}
-            </span>
-            <div className="grid grid-cols-2 gap-2 text-[11px]">
+          {/* Quick Role Fill Pills */}
+          <div className="pt-2 border-t border-[#eef2f6] space-y-2">
+            <p className="text-[11px] font-semibold text-[#667085] text-center">Quick Role Login Fill:</p>
+            <div className="grid grid-cols-2 gap-1.5 text-[11px]">
               <button
                 type="button"
-                onClick={() => {
-                  setIdentifier('aarav_patient');
-                  setPassword('password123');
-                }}
-                className="p-2 rounded-[8px] bg-[#f8fbff] hover:bg-[#e7f7fc] border border-[#e7edf4] text-left transition"
+                onClick={() => { setIdentifier('superadmin@anvay.health'); setPassword('AnvaySuper@2024!'); }}
+                className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded font-medium truncate"
               >
-                <span className="font-bold text-[#101828] block">Aarav Kumar (Patient)</span>
-                <span className="text-[#667085] text-[10px]">ANVAY-2026-8F29K4</span>
+                🛡️ Super Admin
               </button>
-
               <button
                 type="button"
-                onClick={() => {
-                  setIdentifier('hospadmin_metro');
-                  setPassword('password123');
-                }}
-                className="p-2 rounded-[8px] bg-[#f8fbff] hover:bg-[#e7f7fc] border border-[#e7edf4] text-left transition"
+                onClick={() => { setIdentifier('govadmin@anvay.health'); setPassword('AnvayGov@2024!'); }}
+                className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded font-medium truncate"
               >
-                <span className="font-bold text-[#101828] block">Metro Hospital Admin</span>
-                <span className="text-[#667085] text-[10px]">Hospital Staff Vault</span>
+                🏛️ Gov Admin
               </button>
-
               <button
                 type="button"
-                onClick={() => {
-                  setIdentifier('dr_priya');
-                  setPassword('password123');
-                }}
-                className="p-2 rounded-[8px] bg-[#f8fbff] hover:bg-[#e7f7fc] border border-[#e7edf4] text-left transition"
+                onClick={() => { setIdentifier('hospitaladmin@anvay.health'); setPassword('AnvayHospital@2024!'); }}
+                className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded font-medium truncate"
               >
-                <span className="font-bold text-[#101828] block">Dr. Priya Sharma</span>
-                <span className="text-[#667085] text-[10px]">Cardiology (Hospital A)</span>
+                🏥 Hospital Admin
               </button>
-
               <button
                 type="button"
-                onClick={() => {
-                  setIdentifier('govtadmin');
-                  setPassword('password123');
-                }}
-                className="p-2 rounded-[8px] bg-[#f8fbff] hover:bg-[#e7f7fc] border border-[#e7edf4] text-left transition"
+                onClick={() => { setIdentifier('doctor@anvay.health'); setPassword('AnvayDoctor@2024!'); }}
+                className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded font-medium truncate"
               >
-                <span className="font-bold text-[#101828] block">Health Authority</span>
-                <span className="text-[#667085] text-[10px]">Surveillance Analytics</span>
+                🩺 Doctor
               </button>
             </div>
           </div>
 
-          <div className="text-center text-[11px] text-[#667085] space-y-1">
+          <div className="text-center text-[11px] text-[#667085] space-y-2 pt-2">
+            <Link to="/" className="inline-flex items-center gap-1.5 text-[#0f6d8e] font-bold hover:underline">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>
+              Back to Home / Dashboard
+            </Link>
             <p>
               {t('loginPage.noAccount')}{' '}
               <Link to="/register?tab=patient" className="text-[#0f6d8e] font-bold hover:underline">
@@ -254,64 +220,12 @@ export const LoginPage = () => {
               </Link>
             </p>
           </div>
+            </>
+          )}
         </div>
       </section>
 
-      {/* Temporary Password Change Modal */}
-      {showTempPassModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#101828]/70 backdrop-blur-xs text-xs font-semibold">
-          <div className="bg-white max-w-md w-full rounded-[22px] p-7 space-y-4 shadow-anvay-card animate-in fade-in zoom-in duration-200">
-            <div className="w-12 h-12 rounded-full bg-[#eaf8fc] text-[#0f6d8e] flex items-center justify-center mx-auto">
-              <Lock className="w-6 h-6" />
-            </div>
-
-            <div className="text-center space-y-1">
-              <h2 className="text-xl font-extrabold text-[#101828]">
-                First-time Password Reset
-              </h2>
-              <p className="text-xs text-[#667085]">
-                You are logging in with a temporary or default password. Please create a new secure password.
-              </p>
-            </div>
-
-            <form onSubmit={handleChangeTempPassword} className="space-y-4 text-xs">
-              <div className="space-y-1">
-                <label className="block text-[#344054]">New Password *</label>
-                <input
-                  type="password"
-                  required
-                  minLength={6}
-                  value={newTempPassword}
-                  onChange={(e) => setNewTempPassword(e.target.value)}
-                  placeholder="Minimum 6 characters"
-                  className="w-full h-[48px] px-3.5 bg-white border border-[#d0d5dd] rounded-[9px] text-xs outline-none focus:border-[#20a7ce]"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="block text-[#344054]">Confirm New Password *</label>
-                <input
-                  type="password"
-                  required
-                  minLength={6}
-                  value={confirmTempPassword}
-                  onChange={(e) => setConfirmTempPassword(e.target.value)}
-                  placeholder="Verify new password"
-                  className="w-full h-[48px] px-3.5 bg-white border border-[#d0d5dd] rounded-[9px] text-xs outline-none focus:border-[#20a7ce]"
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full h-[48px] bg-[#0f6d8e] hover:bg-[#0b5874] text-white font-bold rounded-[9px] text-xs transition"
-              >
-                {loading ? 'Updating Password...' : 'Reset Password & Log In'}
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Temporary Password Modal Removed */}
     </div>
   );
 };

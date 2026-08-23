@@ -1,271 +1,208 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Users,
-  UserPlus,
-  ShieldCheck,
-  Building2,
-  Lock,
-  Unlock,
-  KeyRound,
-  Eye,
-  EyeOff,
-  Copy,
-  Check,
-  AlertTriangle,
-  Mail,
-  Phone,
-  Search,
-  Edit,
-  Trash2,
-  TrendingUp
+  Users, UserPlus, ShieldCheck, Building2, KeyRound, Mail, Lock, Check,
+  Phone, Search, Edit, Trash2, TrendingUp, AlertTriangle, Send
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../context/AuthContext';
 import { VerifiedDoctorBadge } from '../components/VerifiedDoctorBadge';
+import { db, functions, staffCreatorAuth } from '../firebase';
+import { collection, query, where, onSnapshot, doc, setDoc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { sendPasswordResetEmail, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
+import { auth } from '../firebase';
 
 export const DoctorsPage = () => {
   const { t } = useTranslation();
-  const { token, user } = useAuth();
+  const { user } = useAuth();
 
   const [doctorsList, setDoctorsList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Master Authorization Password Modal state
-  const [isMasterModalOpen, setIsMasterModalOpen] = useState(false);
-  const [masterPasswordInput, setMasterPasswordInput] = useState('');
-  const [masterAuthLoading, setMasterAuthLoading] = useState(false);
-  const [masterAuthError, setMasterAuthError] = useState(null);
-  const [revealedCredentials, setRevealedCredentials] = useState(null);
-  const [copiedId, setCopiedId] = useState(null);
-
   // Add Staff Modal state
   const [isAddStaffOpen, setIsAddStaffOpen] = useState(false);
   const [newStaff, setNewStaff] = useState({
-    name: '',
-    medicalCouncilRegNo: '',
-    specialization: 'Cardiology',
-    department: 'Cardiology',
-    email: '',
-    phone: '',
-    isEmailVerified: true,
-    isMobileVerified: true
+    fullName: '', email: '', password: '', mobile: '', specialization: '', role: 'Doctor'
   });
   const [addStaffLoading, setAddStaffLoading] = useState(false);
   const [addStaffError, setAddStaffError] = useState(null);
-  const [createdCredentialsAlert, setCreatedCredentialsAlert] = useState(null);
+  const [createdAnvayId, setCreatedAnvayId] = useState(null);
 
   // Edit Staff Modal State
-  const [editingStaff, setEditingStaff] = useState(null); // doctor object
+  const [editingStaff, setEditingStaff] = useState(null);
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [editError, setEditError] = useState(null);
   const [editLoading, setEditLoading] = useState(false);
 
   // Role Change Modal State
-  const [roleStaff, setRoleStaff] = useState(null); // doctor object
+  const [roleStaff, setRoleStaff] = useState(null);
   const [isRoleOpen, setIsRoleOpen] = useState(false);
   const [newRoleInput, setNewRoleInput] = useState('Doctor');
-  const [roleMasterPassword, setRoleMasterPassword] = useState('');
   const [roleError, setRoleError] = useState(null);
   const [roleLoading, setRoleLoading] = useState(false);
 
   // Delete Staff Modal State
-  const [deletingStaff, setDeletingStaff] = useState(null); // doctor object
+  const [deletingStaff, setDeletingStaff] = useState(null);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
-  const [deleteMasterPassword, setDeleteMasterPassword] = useState('');
   const [deleteError, setDeleteError] = useState(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
-  const fetchDoctors = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch('/api/doctors', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const data = await res.json();
-      if (data.success) {
-        setDoctorsList(data.doctors);
-      }
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Password reset
+  const [resetSent, setResetSent] = useState({}); // { [uid]: true }
+  const [copiedId, setCopiedId] = useState(null); // clipboard feedback
+
+  const effectiveHospitalId = user?.hospitalId || user?.anvayHospitalId || user?.uid || 'ANVAY-H-0001';
 
   useEffect(() => {
-    fetchDoctors();
-  }, [token]);
+    const q = query(
+      collection(db, 'users'),
+      where('role', 'in', ['Doctor', 'Staff'])
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const allStaff = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(d => !d.isDeleted);
+      setDoctorsList(allStaff);
+      setLoading(false);
+    }, (err) => {
+      console.warn('Error loading staff roster:', err);
+      setLoading(false);
+    });
+    return () => unsub();
+  }, [user]);
 
-  const handleVerifyMasterPassword = async (e) => {
-    e.preventDefault();
-    setMasterAuthLoading(true);
-    setMasterAuthError(null);
-
-    try {
-      const res = await fetch('/api/doctors/reveal-credentials', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({ masterPassword: masterPasswordInput })
-      });
-
-      const data = await res.json();
-      if (data.success) {
-        const map = {};
-        data.credentials.forEach(c => {
-          map[c.id] = c;
-        });
-        setRevealedCredentials(map);
-        setIsMasterModalOpen(false);
-        setMasterPasswordInput('');
-      } else {
-        setMasterAuthError(data.message || 'Master Authorization Password verification failed.');
-      }
-    } catch (err) {
-      setMasterAuthError('Network error during authorization.');
-    } finally {
-      setMasterAuthLoading(false);
-    }
-  };
-
+  // ── Add Staff: create Firebase Auth + Firestore ────────────
   const handleAddStaffSubmit = async (e) => {
     e.preventDefault();
     setAddStaffLoading(true);
     setAddStaffError(null);
-
     try {
-      const res = await fetch('/api/doctors/add-staff', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify(newStaff)
+      if (!newStaff.email.trim() || !newStaff.password || newStaff.password.length < 6) {
+        throw new Error('Email and password (min 6 chars) are required.');
+      }
+
+      // Step 1: Create Firebase Auth account using secondary app
+      // This does NOT sign out the current Hospital Admin
+      let newUid;
+      try {
+        const credential = await createUserWithEmailAndPassword(
+          staffCreatorAuth,
+          newStaff.email.trim(),
+          newStaff.password
+        );
+        newUid = credential.user.uid;
+        // Sign out from secondary app immediately
+        await signOut(staffCreatorAuth);
+      } catch (authErr) {
+        if (authErr.code === 'auth/email-already-in-use') {
+          throw new Error('This email is already registered. Use a different email.');
+        }
+        throw authErr;
+      }
+
+      // Step 2: Create Firestore user doc
+      const rand = Math.floor(1000 + Math.random() * 9000);
+      const generatedAnvayId = `ANVAY-${newStaff.role === 'Doctor' ? 'D' : 'S'}-${new Date().getFullYear()}-${rand}`;
+
+      await setDoc(doc(db, 'users', newUid), {
+        uid: newUid,
+        email: newStaff.email.trim(),
+        name: newStaff.fullName.trim(),
+        fullName: newStaff.fullName.trim(),
+        role: newStaff.role,
+        specialization: newStaff.specialization || (newStaff.role === 'Doctor' ? 'General Medicine' : ''),
+        mobile: newStaff.mobile || '',
+        anvayId: generatedAnvayId,
+        hospitalId: effectiveHospitalId,
+        hospitalName: user?.hospitalName || user?.name || 'Hospital Node',
+        status: 'Active',
+        createdAt: new Date().toISOString(),
+        createdBy: user?.uid
       });
 
-      const data = await res.json();
-      if (data.success) {
-        setCreatedCredentialsAlert({
-          name: newStaff.name,
-          username: data.generatedCredentials.username,
-          password: data.generatedCredentials.generatedPassword
-        });
-        setIsAddStaffOpen(false);
-        setNewStaff({
-          name: '',
-          medicalCouncilRegNo: '',
-          specialization: 'Cardiology',
-          department: 'Cardiology',
-          email: '',
-          phone: '',
-          isEmailVerified: true,
-          isMobileVerified: true
-        });
-        fetchDoctors();
-      } else {
-        setAddStaffError(data.message || 'Failed to add staff member.');
-      }
+      // Step 3: Reserve username/email index
+      await setDoc(doc(db, 'usernames', newStaff.email.trim().replace(/[@.]/g, '_')), { uid: newUid });
+
+      setCreatedAnvayId({ anvayId: generatedAnvayId, email: newStaff.email.trim(), password: newStaff.password });
+      setNewStaff({ fullName: '', email: '', password: '', mobile: '', specialization: '', role: 'Doctor' });
     } catch (err) {
-      setAddStaffError('Network error adding staff.');
+      console.error('Error creating staff:', err);
+      setAddStaffError(err.message || 'Error creating staff account.');
     } finally {
       setAddStaffLoading(false);
     }
   };
 
+  // ── Edit Staff (safe fields only) ─────────────────────────
   const handleEditStaffSubmit = async (e) => {
     e.preventDefault();
     setEditLoading(true);
     setEditError(null);
-
     try {
-      const res = await fetch(`/api/doctors/${editingStaff.id}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify(editingStaff)
+      await updateDoc(doc(db, 'users', editingStaff.id), {
+        name: editingStaff.name,
+        fullName: editingStaff.name,
+        specialization: editingStaff.specialization || '',
+        mobile: editingStaff.mobile || '',
+        updatedAt: serverTimestamp(),
       });
-      const data = await res.json();
-      if (data.success) {
-        setIsEditOpen(false);
-        setEditingStaff(null);
-        fetchDoctors();
-      } else {
-        setEditError(data.message || 'Failed to update staff member.');
-      }
+      setIsEditOpen(false);
+      setEditingStaff(null);
     } catch (err) {
-      setEditError('Network error updating staff.');
+      setEditError(err.message || 'Failed to update staff member.');
     } finally {
       setEditLoading(false);
     }
   };
 
+  // ── Role Change ───────────────────────────────────────────
   const handleRoleChangeSubmit = async (e) => {
     e.preventDefault();
     setRoleLoading(true);
     setRoleError(null);
-
     try {
-      const res = await fetch(`/api/doctors/${roleStaff.id}/role`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          newRole: newRoleInput,
-          masterPassword: roleMasterPassword
-        })
+      await updateDoc(doc(db, 'users', roleStaff.id), {
+        role: newRoleInput,
+        updatedAt: serverTimestamp(),
       });
-      const data = await res.json();
-      if (data.success) {
-        setIsRoleOpen(false);
-        setRoleStaff(null);
-        setRoleMasterPassword('');
-        fetchDoctors();
-      } else {
-        setRoleError(data.message || 'Failed to change role.');
-      }
+      setIsRoleOpen(false);
+      setRoleStaff(null);
     } catch (err) {
-      setRoleError('Network error.');
+      setRoleError(err.message || 'Error changing role.');
     } finally {
       setRoleLoading(false);
     }
   };
 
+  // ── Delete Staff ──────────────────────────────────────────
   const handleDeleteStaffSubmit = async (e) => {
     e.preventDefault();
     setDeleteLoading(true);
     setDeleteError(null);
-
     try {
-      const res = await fetch(`/api/doctors/${deletingStaff.id}`, {
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          masterPassword: deleteMasterPassword
-        })
+      await updateDoc(doc(db, 'users', deletingStaff.id), {
+        status: 'Deleted',
+        isDeleted: true,
+        deletedAt: new Date().toISOString()
       });
-      const data = await res.json();
-      if (data.success) {
-        setIsDeleteOpen(false);
-        setDeletingStaff(null);
-        setDeleteMasterPassword('');
-        fetchDoctors();
-      } else {
-        setDeleteError(data.message || 'Failed to remove staff.');
-      }
+      setIsDeleteOpen(false);
+      setDeletingStaff(null);
     } catch (err) {
-      setDeleteError('Network error.');
+      setDeleteError(err.message || 'Error removing staff.');
     } finally {
       setDeleteLoading(false);
+    }
+  };
+
+  // ── Send Password Reset Email ─────────────────────────────
+  const handleSendResetEmail = async (staffDoc) => {
+    try {
+      await sendPasswordResetEmail(auth, staffDoc.email);
+      setResetSent(prev => ({ ...prev, [staffDoc.id]: true }));
+      setTimeout(() => setResetSent(prev => ({ ...prev, [staffDoc.id]: false })), 4000);
+    } catch (err) {
+      console.error('Reset email error:', err);
     }
   };
 
@@ -276,12 +213,18 @@ export const DoctorsPage = () => {
   };
 
   const filteredDoctors = doctorsList.filter(d =>
-    d.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    d.specialization.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    d.medicalCouncilRegNo.toLowerCase().includes(searchTerm.toLowerCase())
+    (d.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (d.specialization || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (d.medicalCouncilRegNo || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (d.anvayId || '').toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const isHospitalAuthority = user?.role === 'Hospital Admin' || user?.role === 'Super Admin';
+
+  const getInitials = (name) => {
+    if (!name) return '?';
+    return name.split(' ').map(n => n[0] || '').join('').substring(0, 2).toUpperCase();
+  };
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto text-[#101828]">
@@ -330,122 +273,89 @@ export const DoctorsPage = () => {
         )}
       </div>
 
-      {/* Just-created credentials banner */}
-      {createdCredentialsAlert && (
-        <div className="p-4 bg-[#ecfdf3] border border-[#a6f4c5] rounded-[16px] text-xs text-[#067647] space-y-2 animate-in fade-in">
+      {createdAnvayId && (
+        <div className="p-4 bg-[#ecfdf3] border border-[#a6f4c5] rounded-[16px] text-xs text-[#067647] space-y-3 animate-in fade-in">
           <div className="flex justify-between items-center">
-            <strong className="text-sm">✓ Doctor Enrolled & Credentials Generated Successfully!</strong>
-            <button onClick={() => setCreatedCredentialsAlert(null)} className="font-bold">✕</button>
+            <strong className="text-sm">✅ Staff Account Created Successfully!</strong>
+            <button onClick={() => setCreatedAnvayId(null)} className="font-bold text-lg leading-none">✕</button>
           </div>
-          <p>
-            Doctor <strong>{createdCredentialsAlert.name}</strong> has been enrolled. Share these credentials with the doctor:
-          </p>
-          <div className="p-3 bg-white rounded-[9px] border border-[#a6f4c5] font-mono text-xs flex flex-wrap gap-4 items-center">
-            <span>Username: <strong className="text-[#101828]">{createdCredentialsAlert.username}</strong></span>
-            <span>Temporary Password: <strong className="text-[#0f6d8e]">{createdCredentialsAlert.password}</strong></span>
+          <p className="text-[#344054]">Firebase Auth account created. Share these credentials with the new staff member:</p>
+          <div className="bg-white rounded-[12px] border border-[#a6f4c5] p-3 space-y-2 font-mono text-xs">
+            <div className="flex justify-between">
+              <span className="text-[#667085] font-semibold not-italic font-sans">ANVAY ID:</span>
+              <strong className="text-[#0f6d8e]">{typeof createdAnvayId === 'object' ? createdAnvayId.anvayId : createdAnvayId}</strong>
+            </div>
+            {typeof createdAnvayId === 'object' && createdAnvayId.email && (
+              <div className="flex justify-between">
+                <span className="text-[#667085] font-semibold not-italic font-sans">Login Email:</span>
+                <strong className="text-[#101828]">{createdAnvayId.email}</strong>
+              </div>
+            )}
+            {typeof createdAnvayId === 'object' && createdAnvayId.password && (
+              <div className="flex justify-between">
+                <span className="text-[#667085] font-semibold not-italic font-sans">Password:</span>
+                <strong className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">{createdAnvayId.password}</strong>
+              </div>
+            )}
           </div>
+          <p className="text-[10px] text-[#667085]">⚠️ Share credentials privately. Staff can log in immediately at the login page.</p>
         </div>
       )}
 
-      {/* Search & Vault Status Bar */}
-      <div className="bg-white p-4 rounded-[18px] border border-[#e7edf4] shadow-anvay-soft flex flex-wrap items-center justify-between gap-4 text-xs">
+
+      {/* Search Bar */}
+      <div className="bg-white p-4 rounded-[18px] border border-[#e7edf4] shadow-anvay-soft flex items-center text-xs">
         <div className="relative flex-1 max-w-sm">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[#98a2b3]" />
           <input
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Search by doctor name, license no., or specialty..."
+            placeholder="Search by name, specialization, or ANVAY ID..."
             className="w-full h-[42px] pl-9 pr-3 bg-[#f8fbff] border border-[#d0d5dd] rounded-[9px] text-xs outline-none focus:border-[#20a7ce]"
           />
-        </div>
-
-        <div className="flex items-center gap-2 text-xs">
-          {revealedCredentials ? (
-            <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-[20px] bg-[#ecfdf3] text-[#067647] font-bold">
-              <Unlock className="w-3.5 h-3.5" />
-              <span>Staff Password Vault: UNLOCKED</span>
-            </span>
-          ) : (
-            <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-[20px] bg-[#f8fbff] text-[#667085] font-semibold border border-[#e7edf4]">
-              <Lock className="w-3.5 h-3.5 text-[#0f6d8e]" />
-              <span>Passwords Protected (Master Auth Required)</span>
-            </span>
-          )}
         </div>
       </div>
 
       {/* Staff Roster Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {filteredDoctors.map((doc) => {
-          const revealed = revealedCredentials?.[doc.id];
-
           return (
             <div key={doc.id} className="bg-white rounded-[20px] border border-[#e7edf4] p-5 shadow-anvay-soft space-y-4 hover:border-[#0f6d8e]/40 transition flex flex-col justify-between">
               <div className="space-y-4">
                 <div className="flex justify-between items-start">
                   <div className="space-y-0.5">
                     <div className="flex items-center gap-2">
-                      <h3 className="font-bold text-sm text-[#101828]">{doc.name}</h3>
-                      <VerifiedDoctorBadge status="Verified" />
+                      <h3 className="font-bold text-sm text-[#101828]">{doc.fullName || doc.name}</h3>
+                      {doc.role === 'Doctor' && <VerifiedDoctorBadge status="Verified" />}
                     </div>
-                    <p className="text-xs text-[#0f6d8e] font-semibold">{doc.specialization} ({doc.department})</p>
-                    <p className="text-[11px] font-mono text-[#667085]">Lic: {doc.medicalCouncilRegNo} • Role: <strong>{doc.role || 'Doctor'}</strong></p>
+                    {doc.specialization && <p className="text-xs text-[#0f6d8e] font-semibold">{doc.specialization}</p>}
+                    <p className="text-[11px] text-[#667085]">Role: <strong>{doc.role || 'Doctor'}</strong></p>
                   </div>
-
-                  <div className="w-10 h-10 rounded-full bg-[#eaf8fc] text-[#0f6d8e] flex items-center justify-center font-extrabold text-xs">
-                    {doc.name.split(' ').map(n => n[0]).join('').substring(0, 2)}
-                  </div>
-                </div>
-
-                {/* Verification Badges */}
-                <div className="flex flex-wrap gap-2 text-[10px] font-bold">
-                  <span className="px-2 py-0.5 rounded-[20px] bg-[#ecfdf3] text-[#067647] flex items-center gap-1">
-                    ✓ Email Verified ({doc.email})
-                  </span>
-                  <span className="px-2 py-0.5 rounded-[20px] bg-[#ecfdf3] text-[#067647] flex items-center gap-1">
-                    ✓ Mobile Verified ({doc.phone})
-                  </span>
-                </div>
-
-                {/* Protected Credentials Box */}
-                <div className="p-3.5 bg-[#f8fbff] rounded-[12px] border border-[#e7edf4] space-y-1.5 text-xs">
-                  <div className="flex justify-between items-center text-[#667085] text-[11px]">
-                    <span>Assigned Staff Username:</span>
-                    <strong className="font-mono text-[#101828]">{doc.username}</strong>
-                  </div>
-
-                  <div className="flex justify-between items-center text-[#667085] text-[11px] pt-1 border-t border-[#eef2f6]">
-                    <span>Login Password:</span>
-                    {revealed ? (
-                      <div className="flex items-center gap-2">
-                        <strong className="font-mono text-[#0f6d8e] bg-white px-2 py-0.5 rounded border border-[#bfe7f6]">
-                          {revealed.unmaskedPassword}
-                        </strong>
-                        <button
-                          onClick={() => copyToClipboard(revealed.unmaskedPassword, doc.id)}
-                          className="text-[#0f6d8e] hover:text-[#0b5874] p-1 rounded"
-                          title="Copy Password"
-                        >
-                          {copiedId === doc.id ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-1 text-[#98a2b3]">
-                        <span>••••••••••••</span>
-                        <Lock className="w-3 h-3 text-[#98a2b3]" />
-                      </div>
-                    )}
+                  <div className="w-10 h-10 rounded-full bg-[#eaf8fc] text-[#0f6d8e] flex items-center justify-center font-extrabold text-xs shrink-0">
+                    {getInitials(doc.fullName || doc.name)}
                   </div>
                 </div>
 
-                <div className="text-[11px] text-[#667085] flex items-center gap-1">
-                  <Building2 className="w-3.5 h-3.5 text-[#0f6d8e]" />
-                  <span>Affiliated to: <strong>{doc.hospitalName}</strong></span>
+                <div className="text-[11px] text-[#344054] space-y-1">
+                  <p>ANVAY ID: <strong className="font-mono text-[#0f6d8e]">{doc.anvayId || doc.username}</strong></p>
+                  <p>Email: {doc.email}</p>
+                  {doc.mobile && <p>Mobile: {doc.mobile}</p>}
+                </div>
+
+                <div className="pt-2">
+                  <button
+                    onClick={() => handleSendResetEmail(doc)}
+                    disabled={resetSent[doc.id]}
+                    className="w-full py-2 bg-[#f8fbff] hover:bg-[#eaf8fc] text-[#0f6d8e] border border-[#bfe7f6] rounded-[9px] text-[11px] font-bold transition flex items-center justify-center gap-1.5 disabled:opacity-50"
+                  >
+                    {resetSent[doc.id] ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Mail className="w-3.5 h-3.5" />}
+                    {resetSent[doc.id] ? 'Reset Email Sent!' : 'Send Password Reset Email'}
+                  </button>
                 </div>
               </div>
 
-              {/* Action Buttons: Edit, Role Change, Delete */}
+              {/* Action Buttons */}
               {isHospitalAuthority && (
                 <div className="flex gap-2 pt-3 border-t border-[#eef2f6]">
                   <button
@@ -473,73 +383,13 @@ export const DoctorsPage = () => {
         })}
       </div>
 
-      {/* Modal 1: Master Authorization Password */}
-      {isMasterModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#101828]/70 backdrop-blur-xs">
-          <div className="bg-white max-w-md w-full rounded-[22px] p-7 space-y-4 shadow-anvay-card animate-in fade-in zoom-in duration-200">
-            <div className="w-12 h-12 rounded-full bg-[#eaf8fc] text-[#0f6d8e] flex items-center justify-center mx-auto">
-              <KeyRound className="w-6 h-6" />
-            </div>
-
-            <div className="text-center space-y-1">
-              <h2 className="text-xl font-extrabold text-[#101828]">
-                Hospital Master Authorization
-              </h2>
-              <p className="text-xs text-[#667085]">
-                Enter your Hospital Master Authorization Password to unlock and view protected staff credentials.
-              </p>
-            </div>
-
-            {masterAuthError && (
-              <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-[9px] font-medium">
-                {masterAuthError}
-              </div>
-            )}
-
-            <form onSubmit={handleVerifyMasterPassword} className="space-y-4">
-              <div className="space-y-1">
-                <label className="block text-xs font-semibold text-[#344054]">
-                  Master Authorization Password
-                </label>
-                <input
-                  type="password"
-                  required
-                  value={masterPasswordInput}
-                  onChange={(e) => setMasterPasswordInput(e.target.value)}
-                  placeholder="Enter Master Password (Demo: Master@123)"
-                  className="w-full h-[48px] px-3.5 bg-white border border-[#d0d5dd] rounded-[9px] text-xs outline-none focus:border-[#20a7ce] focus:ring-4 focus:ring-[#20a7ce]/10"
-                />
-              </div>
-
-              <div className="flex gap-2.5 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsMasterModalOpen(false)}
-                  className="flex-1 h-[46px] bg-[#f8fbff] text-[#344054] border border-[#d0d5dd] font-bold rounded-[9px] text-xs"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={masterAuthLoading}
-                  className="flex-1 h-[46px] bg-[#0f6d8e] hover:bg-[#0b5874] text-white font-bold rounded-[9px] text-xs"
-                >
-                  {masterAuthLoading ? 'Verifying...' : 'Authorize & Unlock'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Modal 2: Add Doctor / Staff */}
+      {/* Modal: Add Doctor / Staff */}
       {isAddStaffOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#101828]/70 backdrop-blur-xs overflow-y-auto">
-          <div className="bg-white max-w-lg w-full rounded-[22px] p-7 space-y-4 shadow-anvay-card animate-in fade-in zoom-in duration-200">
+          <div className="bg-white max-w-md w-full rounded-[22px] p-7 space-y-4 shadow-anvay-card animate-in fade-in zoom-in duration-200">
             <div className="flex justify-between items-center pb-3 border-b border-[#eef2f6]">
               <div>
-                <h2 className="text-lg font-extrabold text-[#101828]">Enroll Hospital Doctor / Staff</h2>
-                <p className="text-xs text-[#667085]">Credentials will be generated and stored in your hospital vault.</p>
+                <h2 className="text-lg font-extrabold text-[#101828]">Create Staff Account</h2>
               </div>
               <button onClick={() => setIsAddStaffOpen(false)} className="text-slate-400 hover:text-slate-600 font-bold">✕</button>
             </div>
@@ -552,81 +402,90 @@ export const DoctorsPage = () => {
 
             <form onSubmit={handleAddStaffSubmit} className="space-y-4 text-xs">
               <div className="space-y-1">
-                <label className="block font-semibold text-[#344054]">Doctor Full Name *</label>
+                <label className="block font-semibold text-[#344054]">Full Name *</label>
                 <input
                   type="text"
                   required
-                  value={newStaff.name}
-                  onChange={(e) => setNewStaff({ ...newStaff, name: e.target.value })}
-                  placeholder="e.g. Dr. Vikram Sen"
-                  className="w-full h-[44px] px-3 bg-white border border-[#d0d5dd] rounded-[9px] outline-none focus:border-[#20a7ce]"
+                  value={newStaff.fullName}
+                  onChange={(e) => setNewStaff({ ...newStaff, fullName: e.target.value })}
+                  className="w-full h-[40px] px-3 bg-white border border-[#d0d5dd] rounded-[9px] outline-none focus:border-[#20a7ce]"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="block font-semibold text-[#344054]">Medical Council Reg No *</label>
-                  <input
-                    type="text"
-                    required
-                    value={newStaff.medicalCouncilRegNo}
-                    onChange={(e) => setNewStaff({ ...newStaff, medicalCouncilRegNo: e.target.value })}
-                    placeholder="MCI-DL-2024-9912"
-                    className="w-full h-[44px] px-3 bg-white border border-[#d0d5dd] rounded-[9px] outline-none font-mono focus:border-[#20a7ce]"
-                  />
-                </div>
+              <div className="space-y-1">
+                <label className="block font-semibold text-[#344054]">Email *</label>
+                <input
+                  type="email"
+                  required
+                  value={newStaff.email}
+                  onChange={(e) => setNewStaff({ ...newStaff, email: e.target.value })}
+                  className="w-full h-[40px] px-3 bg-white border border-[#d0d5dd] rounded-[9px] outline-none focus:border-[#20a7ce]"
+                />
+              </div>
 
+              <div className="space-y-1">
+                <label className="block font-semibold text-[#344054]">Mobile <span className="text-gray-400">(10 digits)</span></label>
+                <input
+                  type="tel"
+                  value={newStaff.mobile}
+                  maxLength={10}
+                  pattern="[0-9]{10}"
+                  onInput={e => e.target.value = e.target.value.replace(/\D/g, '')}
+                  onChange={(e) => setNewStaff({ ...newStaff, mobile: e.target.value })}
+                  className="w-full h-[40px] px-3 bg-white border border-[#d0d5dd] rounded-[9px] outline-none focus:border-[#20a7ce]"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block font-semibold text-[#344054]">Initial Password * <span className="text-gray-400">(min 6 chars)</span></label>
+                <input
+                  type="password"
+                  required
+                  minLength={6}
+                  value={newStaff.password}
+                  onChange={(e) => setNewStaff({ ...newStaff, password: e.target.value })}
+                  className="w-full h-[40px] px-3 bg-white border border-[#d0d5dd] rounded-[9px] outline-none focus:border-[#20a7ce]"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block font-semibold text-[#344054]">Role *</label>
+                <select
+                  value={newStaff.role}
+                  onChange={(e) => setNewStaff({ ...newStaff, role: e.target.value })}
+                  className="w-full h-[40px] px-3 bg-white border border-[#d0d5dd] rounded-[9px] outline-none focus:border-[#20a7ce]"
+                >
+                  <option value="Doctor">Doctor</option>
+                  <option value="Staff">Staff</option>
+                </select>
+              </div>
+
+              {newStaff.role === 'Doctor' && (
                 <div className="space-y-1">
-                  <label className="block font-semibold text-[#344054]">Specialization *</label>
+                  <label className="block font-semibold text-[#344054]">Specialization</label>
                   <input
                     type="text"
-                    required
                     value={newStaff.specialization}
-                    onChange={(e) => setNewStaff({ ...newStaff, specialization: e.target.value, department: e.target.value })}
-                    placeholder="e.g. Cardiology"
-                    className="w-full h-[44px] px-3 bg-white border border-[#d0d5dd] rounded-[9px] outline-none focus:border-[#20a7ce]"
+                    onChange={(e) => setNewStaff({ ...newStaff, specialization: e.target.value })}
+                    className="w-full h-[40px] px-3 bg-white border border-[#d0d5dd] rounded-[9px] outline-none focus:border-[#20a7ce]"
                   />
                 </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="block font-semibold text-[#344054]">Official Email</label>
-                  <input
-                    type="email"
-                    value={newStaff.email}
-                    onChange={(e) => setNewStaff({ ...newStaff, email: e.target.value })}
-                    placeholder="doctor@hospital.org"
-                    className="w-full h-[44px] px-3 bg-white border border-[#d0d5dd] rounded-[9px] outline-none focus:border-[#20a7ce]"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="block font-semibold text-[#344054]">Mobile Phone</label>
-                  <input
-                    type="tel"
-                    value={newStaff.phone}
-                    onChange={(e) => setNewStaff({ ...newStaff, phone: e.target.value })}
-                    placeholder="+91 98000 00000"
-                    className="w-full h-[44px] px-3 bg-white border border-[#d0d5dd] rounded-[9px] outline-none focus:border-[#20a7ce]"
-                  />
-                </div>
-              </div>
+              )}
 
               <div className="flex justify-end gap-2.5 pt-2">
                 <button
                   type="button"
                   onClick={() => setIsAddStaffOpen(false)}
-                  className="px-4 py-2 bg-slate-100 text-slate-700 rounded-[9px] font-bold"
+                  className="flex-1 py-2 bg-slate-100 text-slate-700 rounded-[9px] font-bold"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={addStaffLoading}
-                  className="px-6 py-2 bg-[#0f6d8e] text-white rounded-[9px] font-bold"
+                  className="flex-1 py-2 bg-[#0f6d8e] text-white rounded-[9px] font-bold disabled:opacity-50"
                 >
-                  {addStaffLoading ? 'Generating...' : 'Enroll Doctor & Generate Login →'}
+                  {addStaffLoading ? 'Creating...' : 'Create Account'}
                 </button>
               </div>
             </form>
@@ -634,12 +493,12 @@ export const DoctorsPage = () => {
         </div>
       )}
 
-      {/* Modal 3: Edit Doctor / Staff */}
+      {/* Modal: Edit Staff */}
       {isEditOpen && editingStaff && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#101828]/70 backdrop-blur-xs overflow-y-auto">
-          <div className="bg-white max-w-lg w-full rounded-[22px] p-7 space-y-4 shadow-anvay-card animate-in fade-in zoom-in duration-200">
+          <div className="bg-white max-w-md w-full rounded-[22px] p-7 space-y-4 shadow-anvay-card animate-in fade-in zoom-in duration-200">
             <div className="flex justify-between items-center pb-3 border-b border-[#eef2f6]">
-              <h2 className="text-lg font-extrabold text-[#101828]">Edit Staff Member Profile</h2>
+              <h2 className="text-lg font-extrabold text-[#101828]">Edit Staff Profile</h2>
               <button onClick={() => { setIsEditOpen(false); setEditingStaff(null); }} className="text-slate-400 hover:text-slate-600 font-bold">✕</button>
             </div>
 
@@ -651,74 +510,51 @@ export const DoctorsPage = () => {
 
             <form onSubmit={handleEditStaffSubmit} className="space-y-4 text-xs">
               <div className="space-y-1">
-                <label className="block font-semibold text-[#344054]">Staff Full Name *</label>
+                <label className="block font-semibold text-[#344054]">Full Name *</label>
                 <input
                   type="text"
                   required
-                  value={editingStaff.name}
+                  value={editingStaff.fullName || editingStaff.name || ''}
                   onChange={(e) => setEditingStaff({ ...editingStaff, name: e.target.value })}
-                  className="w-full h-[44px] px-3 bg-white border border-[#d0d5dd] rounded-[9px]"
+                  className="w-full h-[40px] px-3 bg-white border border-[#d0d5dd] rounded-[9px]"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="block font-semibold text-[#344054]">Specialization</label>
-                  <input
-                    type="text"
-                    required
-                    value={editingStaff.specialization}
-                    onChange={(e) => setEditingStaff({ ...editingStaff, specialization: e.target.value })}
-                    className="w-full h-[44px] px-3 bg-white border border-[#d0d5dd] rounded-[9px]"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="block font-semibold text-[#344054]">Department</label>
-                  <input
-                    type="text"
-                    required
-                    value={editingStaff.department}
-                    onChange={(e) => setEditingStaff({ ...editingStaff, department: e.target.value })}
-                    className="w-full h-[44px] px-3 bg-white border border-[#d0d5dd] rounded-[9px]"
-                  />
-                </div>
+              <div className="space-y-1">
+                <label className="block font-semibold text-[#344054]">Mobile Phone</label>
+                <input
+                  type="tel"
+                  maxLength={10}
+                  pattern="[0-9]{10}"
+                  onInput={e => e.target.value = e.target.value.replace(/\D/g, '')}
+                  value={editingStaff.mobile || ''}
+                  onChange={(e) => setEditingStaff({ ...editingStaff, mobile: e.target.value })}
+                  className="w-full h-[40px] px-3 bg-white border border-[#d0d5dd] rounded-[9px]"
+                />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="block font-semibold text-[#344054]">Official Email</label>
-                  <input
-                    type="email"
-                    value={editingStaff.email}
-                    onChange={(e) => setEditingStaff({ ...editingStaff, email: e.target.value })}
-                    className="w-full h-[44px] px-3 bg-white border border-[#d0d5dd] rounded-[9px]"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="block font-semibold text-[#344054]">Mobile Phone</label>
-                  <input
-                    type="tel"
-                    value={editingStaff.phone}
-                    onChange={(e) => setEditingStaff({ ...editingStaff, phone: e.target.value })}
-                    className="w-full h-[44px] px-3 bg-white border border-[#d0d5dd] rounded-[9px]"
-                  />
-                </div>
+              <div className="space-y-1">
+                <label className="block font-semibold text-[#344054]">Specialization</label>
+                <input
+                  type="text"
+                  value={editingStaff.specialization || ''}
+                  onChange={(e) => setEditingStaff({ ...editingStaff, specialization: e.target.value })}
+                  className="w-full h-[40px] px-3 bg-white border border-[#d0d5dd] rounded-[9px]"
+                />
               </div>
 
               <div className="flex justify-end gap-2.5 pt-2">
                 <button
                   type="button"
                   onClick={() => { setIsEditOpen(false); setEditingStaff(null); }}
-                  className="px-4 py-2 bg-slate-100 text-slate-700 rounded-[9px]"
+                  className="flex-1 py-2 bg-slate-100 text-slate-700 rounded-[9px] font-bold"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={editLoading}
-                  className="px-6 py-2 bg-[#0f6d8e] text-white rounded-[9px] font-bold"
+                  className="flex-1 py-2 bg-[#0f6d8e] text-white rounded-[9px] font-bold disabled:opacity-50"
                 >
                   {editLoading ? 'Saving...' : 'Save Changes'}
                 </button>
@@ -728,13 +564,13 @@ export const DoctorsPage = () => {
         </div>
       )}
 
-      {/* Modal 4: Change Role */}
+      {/* Modal: Change Role */}
       {isRoleOpen && roleStaff && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#101828]/70 backdrop-blur-xs">
           <div className="bg-white max-w-md w-full rounded-[22px] p-7 space-y-4 shadow-anvay-card animate-in fade-in zoom-in duration-200">
             <div className="flex justify-between items-center pb-3 border-b border-[#eef2f6]">
-              <h2 className="text-lg font-extrabold text-[#101828]">Change Staff Role / Title</h2>
-              <button onClick={() => { setIsRoleOpen(false); setRoleStaff(null); setRoleMasterPassword(''); }} className="text-slate-400 hover:text-slate-600 font-bold">✕</button>
+              <h2 className="text-lg font-extrabold text-[#101828]">Change Staff Role</h2>
+              <button onClick={() => { setIsRoleOpen(false); setRoleStaff(null); }} className="text-slate-400 hover:text-slate-600 font-bold">✕</button>
             </div>
 
             {roleError && (
@@ -745,50 +581,31 @@ export const DoctorsPage = () => {
 
             <form onSubmit={handleRoleChangeSubmit} className="space-y-4 text-xs">
               <div className="space-y-1">
-                <label className="block font-semibold text-[#344054]">Select New Clinical/Administrative Role</label>
+                <label className="block font-semibold text-[#344054]">Select New Role</label>
                 <select
                   value={newRoleInput}
                   onChange={(e) => setNewRoleInput(e.target.value)}
-                  className="w-full h-[44px] px-3 bg-white border border-[#d0d5dd] rounded-[9px]"
+                  className="w-full h-[40px] px-3 bg-white border border-[#d0d5dd] rounded-[9px]"
                 >
                   <option value="Doctor">Doctor</option>
-                  <option value="Senior Doctor">Senior Doctor</option>
-                  <option value="Dept Head">Department Head</option>
-                  <option value="Nurse">Nurse</option>
-                  <option value="Senior Nurse">Senior Nurse</option>
-                  <option value="Lab Technician">Lab Technician</option>
-                  <option value="Pharmacist">Pharmacist</option>
-                  <option value="Admin Staff">Admin Staff</option>
-                  <option value="Receptionist">Receptionist</option>
+                  <option value="Staff">Staff</option>
                 </select>
-              </div>
-
-              <div className="space-y-1">
-                <label className="block font-semibold text-[#344054]">Hospital Master Password Verification</label>
-                <input
-                  type="password"
-                  required
-                  value={roleMasterPassword}
-                  onChange={(e) => setRoleMasterPassword(e.target.value)}
-                  placeholder="Verify Master Password"
-                  className="w-full h-[44px] px-3 bg-white border border-[#d0d5dd] rounded-[9px]"
-                />
               </div>
 
               <div className="flex justify-end gap-2.5 pt-2">
                 <button
                   type="button"
-                  onClick={() => { setIsRoleOpen(false); setRoleStaff(null); setRoleMasterPassword(''); }}
-                  className="px-4 py-2 bg-slate-100 text-slate-700 rounded-[9px]"
+                  onClick={() => { setIsRoleOpen(false); setRoleStaff(null); }}
+                  className="flex-1 py-2 bg-slate-100 text-slate-700 rounded-[9px] font-bold"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={roleLoading}
-                  className="px-6 py-2 bg-[#0f6d8e] text-white rounded-[9px] font-bold"
+                  className="flex-1 py-2 bg-[#0f6d8e] text-white rounded-[9px] font-bold disabled:opacity-50"
                 >
-                  {roleLoading ? 'Updating...' : 'Confirm Role Update'}
+                  {roleLoading ? 'Updating...' : 'Confirm Role'}
                 </button>
               </div>
             </form>
@@ -796,7 +613,7 @@ export const DoctorsPage = () => {
         </div>
       )}
 
-      {/* Modal 5: Delete Staff */}
+      {/* Modal: Delete Staff */}
       {isDeleteOpen && deletingStaff && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#101828]/70 backdrop-blur-xs">
           <div className="bg-white max-w-md w-full rounded-[22px] p-7 space-y-4 shadow-anvay-card animate-in fade-in zoom-in duration-200">
@@ -804,7 +621,7 @@ export const DoctorsPage = () => {
               <h2 className="text-lg font-extrabold text-red-700 flex items-center gap-1">
                 <AlertTriangle className="w-5 h-5 text-red-600" /> Remove Staff Member
               </h2>
-              <button onClick={() => { setIsDeleteOpen(false); setDeletingStaff(null); setDeleteMasterPassword(''); }} className="text-slate-400 hover:text-slate-600 font-bold">✕</button>
+              <button onClick={() => { setIsDeleteOpen(false); setDeletingStaff(null); }} className="text-slate-400 hover:text-slate-600 font-bold">✕</button>
             </div>
 
             {deleteError && (
@@ -815,33 +632,21 @@ export const DoctorsPage = () => {
 
             <form onSubmit={handleDeleteStaffSubmit} className="space-y-4 text-xs">
               <p className="text-xs text-slate-600 leading-relaxed">
-                Are you sure you want to remove <strong>{deletingStaff.name}</strong> from your hospital? This action will revoke their login credentials and portal access immediately.
+                Are you sure you want to remove <strong>{deletingStaff.fullName || deletingStaff.name}</strong>? This action will revoke their login credentials and portal access immediately.
               </p>
-
-              <div className="space-y-1">
-                <label className="block font-semibold text-[#344054]">Hospital Master Password Verification</label>
-                <input
-                  type="password"
-                  required
-                  value={deleteMasterPassword}
-                  onChange={(e) => setDeleteMasterPassword(e.target.value)}
-                  placeholder="Verify Master Password"
-                  className="w-full h-[44px] px-3 bg-white border border-[#d0d5dd] rounded-[9px]"
-                />
-              </div>
 
               <div className="flex justify-end gap-2.5 pt-2">
                 <button
                   type="button"
-                  onClick={() => { setIsDeleteOpen(false); setDeletingStaff(null); setDeleteMasterPassword(''); }}
-                  className="px-4 py-2 bg-slate-100 text-slate-700 rounded-[9px]"
+                  onClick={() => { setIsDeleteOpen(false); setDeletingStaff(null); }}
+                  className="flex-1 py-2 bg-slate-100 text-slate-700 rounded-[9px] font-bold"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={deleteLoading}
-                  className="px-6 py-2 bg-red-700 text-white rounded-[9px] font-bold"
+                  className="flex-1 py-2 bg-red-700 text-white rounded-[9px] font-bold disabled:opacity-50"
                 >
                   {deleteLoading ? 'Removing...' : 'Confirm Removal'}
                 </button>

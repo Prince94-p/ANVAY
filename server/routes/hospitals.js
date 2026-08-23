@@ -154,6 +154,9 @@ router.patch('/:id/verify', authenticateToken, requireRole('Super Admin'), (req,
     severity: status === 'Approved' ? 'SECURITY' : 'HIGH_ALERT'
   });
 
+  res.json({
+    success: true,
+    message: `Hospital verification status updated to ${status}`,
     hospital
   });
 });
