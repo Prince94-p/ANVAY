@@ -98,7 +98,7 @@ Medical records can identify:
 * Record history
 
 📄 Multi-format Medical Documents
-
+ 
 The system supports medical information and documents in formats such as:
 
 * PDF
