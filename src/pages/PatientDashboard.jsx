@@ -42,6 +42,10 @@ export const PatientDashboard = () => {
   const [ecPhotoUploading, setEcPhotoUploading] = useState(false);
   const ecPhotoRef = useRef(null);
 
+  // Profile photo upload
+  const [photoUploading, setPhotoUploading] = useState(false);
+  const photoRef = useRef(null);
+
   // Aadhaar card upload
   const [aadhaarUploading, setAadhaarUploading] = useState(false);
   const aadhaarRef = useRef(null);
@@ -155,6 +159,27 @@ export const PatientDashboard = () => {
       console.error('EC photo upload error:', err);
       alert('Upload failed: ' + err.message);
     } finally { setEcPhotoUploading(false); }
+  };
+
+  // Upload patient profile photo
+  const handleProfilePhotoUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      alert('Only JPEG, PNG or WebP images allowed.'); return;
+    }
+    if (file.size > 5 * 1024 * 1024) { alert('Photo must be under 5MB.'); return; }
+    setPhotoUploading(true);
+    try {
+      const targetId = patientDocId || user?.uid;
+      const storageRef = ref(storage, `patients/${targetId}/profile-photo`);
+      await uploadBytes(storageRef, file);
+      const url = await getDownloadURL(storageRef);
+      await updateDoc(doc(db, 'users', targetId), { photoUrl: url, updatedAt: serverTimestamp() });
+    } catch (err) {
+      console.error('Profile photo upload error:', err);
+      alert('Upload failed: ' + err.message);
+    } finally { setPhotoUploading(false); }
   };
 
   // Upload Aadhaar card to Firebase Storage
@@ -711,6 +736,31 @@ export const PatientDashboard = () => {
               >
                 ✕
               </button>
+            </div>
+
+            {/* Profile Photo Upload */}
+            <div className="flex flex-col items-center gap-2 py-2">
+              <div className="relative">
+                <div className="w-20 h-20 rounded-full bg-[#eaf8fc] border-2 border-[#20a7ce] overflow-hidden flex items-center justify-center">
+                  {patient?.photoUrl
+                    ? <img src={patient.photoUrl} alt="Profile" className="w-full h-full object-cover" />
+                    : <span className="text-3xl font-black text-[#0f6d8e]">{(patient?.fullName || user?.name || 'P')[0].toUpperCase()}</span>
+                  }
+                </div>
+                <button
+                  type="button"
+                  onClick={() => photoRef.current?.click()}
+                  disabled={photoUploading}
+                  className="absolute -bottom-1 -right-1 w-7 h-7 bg-[#0f6d8e] hover:bg-[#0b5874] rounded-full flex items-center justify-center shadow transition"
+                >
+                  {photoUploading
+                    ? <span className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
+                    : <Camera className="w-3.5 h-3.5 text-white" />
+                  }
+                </button>
+                <input ref={photoRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={handleProfilePhotoUpload} />
+              </div>
+              <p className="text-[11px] text-[#667085]">{photoUploading ? 'Uploading photo...' : 'Click camera icon to update photo'}</p>
             </div>
 
             {editSuccess && (

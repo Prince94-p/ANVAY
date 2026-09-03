@@ -126,6 +126,7 @@ export const DoctorsPage = () => {
 
       setCreatedAnvayId({ anvayId: generatedAnvayId, email: newStaff.email.trim(), password: newStaff.password });
       setNewStaff({ fullName: '', email: '', password: '', mobile: '', specialization: '', role: 'Doctor' });
+      setIsAddStaffOpen(false);
     } catch (err) {
       console.error('Error creating staff:', err);
       setAddStaffError(err.message || 'Error creating staff account.');
@@ -223,7 +224,9 @@ export const DoctorsPage = () => {
 
   const getInitials = (name) => {
     if (!name) return '?';
-    return name.split(' ').map(n => n[0] || '').join('').substring(0, 2).toUpperCase();
+    // Ensure name is a string before splitting
+    const nameStr = typeof name === 'string' ? name : String(name);
+    return nameStr.split(' ').map(n => n[0] || '').join('').substring(0, 2).toUpperCase();
   };
 
   return (
@@ -244,24 +247,6 @@ export const DoctorsPage = () => {
 
         {isHospitalAuthority && (
           <div className="flex flex-wrap items-center gap-2.5">
-            {!revealedCredentials ? (
-              <button
-                onClick={() => setIsMasterModalOpen(true)}
-                className="px-3.5 py-2.5 bg-[#f8fbff] hover:bg-[#e7f7fc] text-[#0f6d8e] border border-[#d0d5dd] rounded-[9px] text-xs font-bold shadow-xs transition flex items-center gap-1.5"
-              >
-                <KeyRound className="w-4 h-4 text-[#0f6d8e]" />
-                <span>Unlock Passwords (Master Key)</span>
-              </button>
-            ) : (
-              <button
-                onClick={() => setRevealedCredentials(null)}
-                className="px-3.5 py-2.5 bg-[#101828] text-white rounded-[9px] text-xs font-bold shadow-xs transition flex items-center gap-1.5"
-              >
-                <Lock className="w-4 h-4 text-[#20a7ce]" />
-                <span>Lock Passwords Vault</span>
-              </button>
-            )}
-
             <button
               onClick={() => setIsAddStaffOpen(true)}
               className="px-4 py-2.5 bg-[#0f6d8e] hover:bg-[#0b5874] text-white rounded-[9px] text-xs font-bold shadow-xs transition flex items-center gap-1.5"
@@ -317,10 +302,13 @@ export const DoctorsPage = () => {
         </div>
       </div>
 
-      {/* Staff Roster Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {filteredDoctors.map((doc) => {
-          return (
+      {loading ? (
+        <div className="text-center py-10 text-gray-600">Loading staff...</div>
+      ) : filteredDoctors.length === 0 ? (
+        <div className="text-center py-10 text-gray-600">No staff members found.</div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filteredDoctors.map((doc) => (
             <div key={doc.id} className="bg-white rounded-[20px] border border-[#e7edf4] p-5 shadow-anvay-soft space-y-4 hover:border-[#0f6d8e]/40 transition flex flex-col justify-between">
               <div className="space-y-4">
                 <div className="flex justify-between items-start">
@@ -379,9 +367,9 @@ export const DoctorsPage = () => {
                 </div>
               )}
             </div>
-          );
-        })}
-      </div>
+          ))}
+        </div>
+      )}
 
       {/* Modal: Add Doctor / Staff */}
       {isAddStaffOpen && (

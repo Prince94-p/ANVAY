@@ -8,7 +8,7 @@ import {
   createUserWithEmailAndPassword,
   sendPasswordResetEmail,
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 
 const KNOWN_ADMINS = {
@@ -98,14 +98,27 @@ export const AuthProvider = ({ children }) => {
       if (matchedAdminKey) {
         email = matchedAdminKey;
       } else if (!email.includes('@')) {
+        // 1. Direct Firestore lookup for ANVAY ID, Username, or Mobile
         try {
-          const resolveIdentifier = httpsCallable(functions, 'resolveLoginIdentifier');
-          const result = await resolveIdentifier({ identifier: email });
-          if (result.data?.email) {
-            email = result.data.email;
+          const idUpper = email.toUpperCase();
+          const qAnvay = query(collection(db, 'users'), where('anvayId', '==', idUpper));
+          let snap = await getDocs(qAnvay);
+          if (snap.empty) {
+            const qUser = query(collection(db, 'users'), where('username', '==', email.toLowerCase()));
+            snap = await getDocs(qUser);
           }
-        } catch (err) {
-          console.warn('resolveLoginIdentifier error:', err);
+          if (snap.empty) {
+            const qMobile = query(collection(db, 'users'), where('mobile', '==', email));
+            snap = await getDocs(qMobile);
+          }
+          if (!snap.empty) {
+            const uData = snap.docs[0].data();
+            if (uData.email) {
+              email = uData.email;
+            }
+          }
+        } catch (lookupErr) {
+          console.warn('Firestore identifier lookup warning:', lookupErr);
         }
       }
 

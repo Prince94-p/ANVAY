@@ -21,7 +21,7 @@ service cloud.firestore {
     }
 
     function isGovernment() {
-      return getUserData().role == 'Government';
+      return getUserData().role == 'Government Admin' || getUserData().role == 'Government';
     }
 
     function isHospitalAdmin() {
@@ -29,7 +29,7 @@ service cloud.firestore {
     }
 
     function isDoctor() {
-      return getUserData().role == 'Doctor';
+      return getUserData().role == 'Doctor' || getUserData().role == 'Staff';
     }
 
     function isPatient() {
@@ -41,25 +41,23 @@ service cloud.firestore {
         isOwner(userId) ||
         isSuperAdmin() ||
         isGovernment() ||
-        // Hospital Admins can read patients and staff linked to their hospital's Anvay ID
-        (isHospitalAdmin() && resource.data.hospitalId == getUserData().anvayId) ||
-        // Doctors can read patients explicitly assigned to them
-        (isDoctor() && request.auth.uid in resource.data.assignedDoctorIds) ||
-        // Allow creating hospital/patient to read other hospitals if needed for dropdowns, etc. 
-        // We will restrict this in production, but allow basic reads for the platform to function
+        isHospitalAdmin() ||
+        isDoctor() ||
         (resource.data.role == 'Hospital Admin')
       );
 
-      // Creation happens via Cloud Functions (Admin SDK bypasses rules) 
-      // or self-registration for Patients/Hospitals
+      // Allow self-registration (Patient, Hospital) AND hospital admins creating staff docs
       allow create: if isAuthenticated() && (
-        isOwner(userId)
+        isOwner(userId) ||
+        isHospitalAdmin() ||
+        isSuperAdmin()
       );
 
       allow update: if isAuthenticated() && (
         isOwner(userId) ||
         isSuperAdmin() ||
-        (isHospitalAdmin() && resource.data.hospitalId == getUserData().anvayId)
+        isHospitalAdmin() ||
+        isDoctor()
       );
 
       allow delete: if false; // Only Admin SDK can delete
@@ -69,14 +67,20 @@ service cloud.firestore {
       allow read: if isAuthenticated() && (
         isSuperAdmin() ||
         isGovernment() ||
-        // Patients can read their own records
-        (isPatient() && resource.data.patientId == getUserData().anvayId) ||
-        // Doctors and Hospital Admins can read records
+        isPatient() ||
         isDoctor() ||
         isHospitalAdmin()
       );
       
-      allow create, update: if isAuthenticated() && (
+      // Patients can create self-reported records; doctors/hospitals can create any
+      allow create: if isAuthenticated() && (
+        isDoctor() ||
+        isHospitalAdmin() ||
+        isSuperAdmin() ||
+        isPatient()
+      );
+
+      allow update: if isAuthenticated() && (
         isDoctor() ||
         isHospitalAdmin() ||
         isSuperAdmin()
@@ -85,12 +89,19 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /usernames/{username} {
+      allow read, write: if isAuthenticated() && (
+        isHospitalAdmin() || isSuperAdmin() || isOwner(username)
+      );
+    }
+
     match /deletionRequests/{requestId} {
       allow read: if isAuthenticated() && (
         isSuperAdmin() ||
         resource.data.userId == request.auth.uid
       );
-      allow write: if false; // Handled exclusively by Cloud Functions
+      allow create: if isAuthenticated();
+      allow update, delete: if false;
     }
 
     match /hospitals/{hospitalId} {

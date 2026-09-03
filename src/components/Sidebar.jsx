@@ -26,7 +26,7 @@ export const Sidebar = ({ isOpen, onClose }) => {
 
   let navItems = [];
 
-  if (role === 'Doctor') {
+  if (role === 'Doctor' || role === 'Staff') {
     navItems = [
       { to: '/doctor-dashboard', label: t('nav.dashboard'), icon: LayoutDashboard },
       { to: '/patient-search', label: t('nav.searchPatient'), icon: Search },

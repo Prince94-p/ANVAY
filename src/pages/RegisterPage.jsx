@@ -5,8 +5,8 @@ import { User, Building2, CheckCircle, ArrowRight, AlertCircle } from 'lucide-re
 import { httpsCallable } from 'firebase/functions';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { auth, functions, storage, db } from '../firebase';
-import { doc, updateDoc } from 'firebase/firestore';
-import { signInWithCustomToken, signInWithEmailAndPassword } from 'firebase/auth';
+import { doc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { createUserWithEmailAndPassword, signInWithCustomToken, signInWithEmailAndPassword } from 'firebase/auth';
 
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024; // 5 MB
@@ -23,29 +23,54 @@ export const RegisterPage = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('patient');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [successData, setSuccessData] = useState(null);
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
-    if (params.get('tab') === 'hospital') setActiveTab('hospital');
+    const tab = params.get('tab');
+    if (tab === 'hospital') {
+      setActiveTab('hospital');
+    } else {
+      setActiveTab('patient');
+    }
   }, [location]);
 
+  // Form states
   const [patientData, setPatientData] = useState({
-    fullName: '', dateOfBirth: '', gender: 'Male', bloodGroup: 'O+',
-    mobile: '', email: '', password: '', username: '',
-    govtIdType: 'Aadhaar', govtIdNumber: ''
+    email: '',
+    password: '',
+    username: '',
+    fullName: '',
+    dateOfBirth: '',
+    gender: 'Male',
+    bloodGroup: 'O+',
+    mobile: '',
+    govtIdType: 'Aadhaar',
+    govtIdNumber: '',
   });
+
+  const [hospitalData, setHospitalData] = useState({
+    email: '',
+    password: '',
+    username: '',
+    hospitalName: '',
+    type: 'Hospital',
+    address: '',
+    district: '',
+    state: '',
+    phone: '',
+    regNumber: '',
+    representative: '',
+  });
+
   const [patientPhoto, setPatientPhoto] = useState(null);
   const [patientPhotoError, setPatientPhotoError] = useState(null);
 
-  const [hospitalData, setHospitalData] = useState({
-    hospitalName: '', type: 'General Hospital', address: '', district: '', state: '',
-    phone: '', email: '', password: '', username: '', regNumber: '', representative: ''
-  });
   const [hospitalPhoto, setHospitalPhoto] = useState(null);
   const [hospitalPhotoError, setHospitalPhotoError] = useState(null);
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [successData, setSuccessData] = useState(null);
 
   const handlePatientPhotoChange = (e) => {
     const file = e.target.files[0];
@@ -68,41 +93,77 @@ export const RegisterPage = () => {
     setError(null);
 
     try {
-      // Call Cloud Function — atomically creates user with unique username + ANVAY ID
-      const registerPatient = httpsCallable(functions, 'registerPatient');
-      const result = await registerPatient({
-        email: patientData.email,
-        password: patientData.password,
-        username: patientData.username,
-        fullName: patientData.fullName,
-        dateOfBirth: patientData.dateOfBirth,
-        gender: patientData.gender,
-        bloodGroup: patientData.bloodGroup,
-        mobile: patientData.mobile,
-        govtIdType: patientData.govtIdType,
-        govtIdNumber: patientData.govtIdNumber,
-      });
+      let uid, anvayId;
 
-      const { uid, anvayId } = result.data;
+      // 1. Try Cloud Function first
+      try {
+        const registerPatient = httpsCallable(functions, 'registerPatient');
+        const result = await registerPatient({
+          email: patientData.email,
+          password: patientData.password,
+          username: patientData.username,
+          fullName: patientData.fullName,
+          dateOfBirth: patientData.dateOfBirth,
+          gender: patientData.gender,
+          bloodGroup: patientData.bloodGroup,
+          mobile: patientData.mobile,
+          govtIdType: patientData.govtIdType,
+          govtIdNumber: patientData.govtIdNumber,
+        });
+        uid = result.data.uid;
+        anvayId = result.data.anvayId;
+      } catch (cfErr) {
+        console.warn('Cloud Function unavailable, using direct Auth registration:', cfErr);
+        // Fallback to direct Firebase Auth + Firestore
+        const userCredential = await createUserWithEmailAndPassword(
+          auth,
+          patientData.email,
+          patientData.password
+        );
+        uid = userCredential.user.uid;
+        anvayId = `ANVAY-P-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-      // Upload profile photo if provided (after account created)
+        await setDoc(doc(db, 'users', uid), {
+          uid,
+          anvayId,
+          role: 'Patient',
+          email: patientData.email,
+          username: patientData.username.toLowerCase(),
+          fullName: patientData.fullName,
+          name: patientData.fullName,
+          dateOfBirth: patientData.dateOfBirth,
+          gender: patientData.gender,
+          bloodGroup: patientData.bloodGroup,
+          mobile: patientData.mobile,
+          govtIdType: patientData.govtIdType,
+          govtIdNumber: patientData.govtIdNumber,
+          status: 'Active',
+          verified: true,
+          createdAt: new Date().toISOString()
+        });
+
+        try {
+          await setDoc(doc(db, 'usernames', patientData.username.toLowerCase()), { uid });
+        } catch (_) {}
+      }
+
+      // Upload profile photo if provided
       if (patientPhoto && uid) {
         try {
-          const photoRef = ref(storage, `users/${uid}/profile.jpg`);
+          const photoRef = ref(storage, `patients/${uid}/profile-photo`);
           await uploadBytes(photoRef, patientPhoto);
           const photoURL = await getDownloadURL(photoRef);
-          await updateDoc(doc(db, 'users', uid), { photoURL });
+          await updateDoc(doc(db, 'users', uid), { photoURL, photoUrl: photoURL });
         } catch (photoErr) {
-          console.warn('Photo upload failed (account still created):', photoErr);
+          console.warn('Photo upload warning:', photoErr);
         }
       }
 
       setSuccessData({ anvayId, isHospital: false });
     } catch (err) {
       console.error(err);
-      const code = err.code || '';
-      if (code.includes('already-exists')) {
-        setError('That username is already taken. Please choose a different one.');
+      if (err.code === 'auth/email-already-in-use') {
+        setError('An account with this email already exists.');
       } else {
         setError(err.message || 'Registration failed. Please check your details and try again.');
       }
@@ -118,43 +179,91 @@ export const RegisterPage = () => {
     setError(null);
 
     try {
-      const registerHospital = httpsCallable(functions, 'registerHospital');
-      const result = await registerHospital({
-        email: hospitalData.email,
-        password: hospitalData.password,
-        username: hospitalData.username,
-        hospitalName: hospitalData.hospitalName,
-        type: hospitalData.type,
-        address: hospitalData.address,
-        district: hospitalData.district,
-        state: hospitalData.state,
-        phone: hospitalData.phone,
-        regNumber: hospitalData.regNumber,
-        representative: hospitalData.representative,
-      });
+      let uid, anvayId, hospitalId;
 
-      const { uid, anvayId, hospitalId } = result.data;
+      try {
+        const registerHospital = httpsCallable(functions, 'registerHospital');
+        const result = await registerHospital({
+          email: hospitalData.email,
+          password: hospitalData.password,
+          username: hospitalData.username,
+          hospitalName: hospitalData.hospitalName,
+          type: hospitalData.type,
+          address: hospitalData.address,
+          district: hospitalData.district,
+          state: hospitalData.state,
+          phone: hospitalData.phone,
+          regNumber: hospitalData.regNumber,
+          representative: hospitalData.representative,
+        });
+        uid = result.data.uid;
+        anvayId = result.data.anvayId;
+        hospitalId = result.data.hospitalId;
+      } catch (cfErr) {
+        console.warn('Cloud Function unavailable, using direct hospital registration:', cfErr);
+        const userCredential = await createUserWithEmailAndPassword(
+          auth,
+          hospitalData.email,
+          hospitalData.password
+        );
+        uid = userCredential.user.uid;
+        hospitalId = `ANVAY-H-${Math.floor(1000 + Math.random() * 9000)}`;
+        anvayId = `ANVAY-HA-${Math.floor(1000 + Math.random() * 9000)}`;
+
+        await setDoc(doc(db, 'users', uid), {
+          uid,
+          anvayId,
+          hospitalId,
+          role: 'Hospital Admin',
+          email: hospitalData.email,
+          username: hospitalData.username.toLowerCase(),
+          hospitalName: hospitalData.hospitalName,
+          name: hospitalData.representative || hospitalData.hospitalName,
+          type: hospitalData.type,
+          address: hospitalData.address,
+          district: hospitalData.district,
+          state: hospitalData.state,
+          phone: hospitalData.phone,
+          regNumber: hospitalData.regNumber,
+          representative: hospitalData.representative,
+          status: 'Pending Verification',
+          verified: false,
+          createdAt: new Date().toISOString()
+        });
+
+        await setDoc(doc(db, 'hospitals', hospitalId), {
+          hospitalId,
+          adminUid: uid,
+          name: hospitalData.hospitalName,
+          type: hospitalData.type,
+          address: hospitalData.address,
+          district: hospitalData.district,
+          state: hospitalData.state,
+          phone: hospitalData.phone,
+          regNumber: hospitalData.regNumber,
+          verificationStatus: 'Pending',
+          verified: false,
+          createdAt: new Date().toISOString()
+        });
+      }
 
       // Upload hospital photo if provided
       if (hospitalPhoto && uid) {
         try {
-          const photoRef = ref(storage, `users/${uid}/profile.jpg`);
+          const photoRef = ref(storage, `hospitals/${hospitalId || uid}/profile.jpg`);
           await uploadBytes(photoRef, hospitalPhoto);
           const photoURL = await getDownloadURL(photoRef);
-          await updateDoc(doc(db, 'users', uid), { photoURL });
+          await updateDoc(doc(db, 'users', uid), { photoURL, photoUrl: photoURL });
         } catch (photoErr) {
-          console.warn('Photo upload failed (account still created):', photoErr);
+          console.warn('Hospital photo upload warning:', photoErr);
         }
       }
 
-      setSuccessData({ anvayId, isHospital: true });
+      setSuccessData({ anvayId: anvayId || hospitalId, isHospital: true });
     } catch (err) {
       console.error(err);
-      const code = err.code || '';
-      if (code.includes('already-exists')) {
-        setError('That username is already taken. Please choose a different username.');
-      } else if (code.includes('email-already-exists') || err.message?.includes('email-already-exists')) {
-        setError('An account with that email already exists.');
+      if (err.code === 'auth/email-already-in-use') {
+        setError('An account with this email already exists.');
       } else {
         setError(err.message || 'Hospital registration failed. Please check your details.');
       }

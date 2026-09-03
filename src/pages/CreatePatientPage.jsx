@@ -2,9 +2,9 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../context/AuthContext';
-import { db, functions, storage } from '../firebase';
-import { collection, query, where, getDocs, doc, updateDoc } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
+import { db, storage, staffCreatorAuth } from '../firebase';
+import { collection, query, where, getDocs, doc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 export const CreatePatientPage = () => {
@@ -41,6 +41,19 @@ export const CreatePatientPage = () => {
   const [loading, setLoading] = useState(false);
   const [createdPatient, setCreatedPatient] = useState(null);
   const [error, setError] = useState(null);
+
+  const calculateAge = (dob) => {
+    if (!dob) return '';
+    const birthDate = new Date(dob);
+    if (isNaN(birthDate.getTime())) return '';
+    const today = new Date();
+    let age = today.getFullYear() - birthDate.getFullYear();
+    const m = today.getMonth() - birthDate.getMonth();
+    if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
+      age--;
+    }
+    return age >= 0 ? age : '';
+  };
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -86,10 +99,16 @@ export const CreatePatientPage = () => {
       return;
     }
 
+    if (formData.password && formData.password.length < 6) {
+      setError('Password must be at least 6 characters');
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
     const fullName = `${formData.firstName} ${formData.lastName}`.trim();
+    const calculatedAge = calculateAge(formData.dateOfBirth);
     const initialAllergies = formData.allergy ? [{
       substance: formData.allergy,
       severity: 'Moderate',
@@ -109,62 +128,113 @@ export const CreatePatientPage = () => {
     }] : [];
 
     try {
-      const registerPatient = httpsCallable(functions, 'registerPatient');
-      const generatedUsername = (formData.email ? formData.email.split('@')[0] : `patient_${Date.now()}`).toLowerCase().replace(/[^a-z0-9_]/g, '');
+      // 1. Generate clean username & email for Firebase Auth
+      const rawUser = formData.email ? formData.email.split('@')[0] : `${formData.firstName}_${formData.mobile.slice(-4) || Math.floor(1000 + Math.random() * 9000)}`;
+      const generatedUsername = rawUser.toLowerCase().replace(/[^a-z0-9_]/g, '');
+      const patientEmail = formData.email.trim() || `${generatedUsername}@patient.anvay.health`;
+      const patientPassword = formData.password || 'Patient@1234';
+      const finalAnvayId = previewId;
 
-      const result = await registerPatient({
-        email: formData.email || `${generatedUsername}@patient.anvay.health`,
-        password: formData.password || 'Patient@1234',
-        username: generatedUsername,
+      // 2. Create Firebase Auth account using secondary app (does NOT sign out current doctor/admin)
+      let newUid;
+      try {
+        const credential = await createUserWithEmailAndPassword(
+          staffCreatorAuth,
+          patientEmail,
+          patientPassword
+        );
+        newUid = credential.user.uid;
+        await signOut(staffCreatorAuth);
+      } catch (authErr) {
+        if (authErr.code === 'auth/email-already-in-use') {
+          throw new Error('This email address is already registered. Please provide a different email.');
+        }
+        throw authErr;
+      }
+
+      // 3. Upload Profile Photo & ID Doc to Storage if selected
+      let uploadedPhotoUrl = null;
+      let uploadedIdUrl = null;
+
+      if (profilePhoto && newUid) {
+        try {
+          const photoRef = ref(storage, `patients/${newUid}/profile-photo`);
+          await uploadBytes(photoRef, profilePhoto);
+          uploadedPhotoUrl = await getDownloadURL(photoRef);
+        } catch (storageErr) {
+          console.warn('Profile photo upload warning:', storageErr);
+        }
+      }
+
+      if (idDocument && newUid) {
+        try {
+          const idRef = ref(storage, `patients/${newUid}/aadhaar-card`);
+          await uploadBytes(idRef, idDocument);
+          uploadedIdUrl = await getDownloadURL(idRef);
+        } catch (docErr) {
+          console.warn('ID document upload warning:', docErr);
+        }
+      }
+
+      // 4. Create primary Firestore User Document
+      const emergencyContactStr = formData.emergencyName
+        ? `${formData.emergencyName} (${formData.emergencyNumber || 'No phone'})`
+        : (formData.emergencyNumber || '');
+
+      const patientDocData = {
+        uid: newUid,
+        anvayId: finalAnvayId,
+        role: 'Patient',
+        name: fullName,
         fullName,
-        dateOfBirth: formData.dateOfBirth,
+        firstName: formData.firstName.trim(),
+        lastName: formData.lastName.trim(),
+        email: patientEmail,
+        username: generatedUsername,
+        mobile: formData.mobile.trim(),
         gender: formData.gender,
         bloodGroup: formData.bloodGroup,
-        mobile: formData.mobile,
+        dateOfBirth: formData.dateOfBirth,
+        age: calculatedAge,
+        address: `${formData.district}, ${formData.state}`,
+        district: formData.district,
+        state: formData.state,
+        emergencyContact: emergencyContactStr,
+        emergencyContactName: formData.emergencyName,
+        emergencyContactPhone: formData.emergencyNumber,
+        allergies: initialAllergies,
+        chronicConditions: initialConditions,
         govtIdType: 'Aadhaar',
-        govtIdNumber: formData.aadhaar
+        govtIdNumber: formData.aadhaar.trim(),
+        photoURL: uploadedPhotoUrl,
+        photoUrl: uploadedPhotoUrl,
+        aadhaarCardUrl: uploadedIdUrl,
+        registeredAtHospitalId: user?.hospitalId || user?.anvayId || '',
+        registeredAtHospitalName: user?.hospitalName || user?.name || 'Network Hospital',
+        status: 'Active',
+        verified: true,
+        createdBy: user?.uid || 'Hospital Staff',
+        createdAt: new Date().toISOString(),
+        timestamp: serverTimestamp()
+      };
+
+      await setDoc(doc(db, 'users', newUid), patientDocData);
+
+      // 5. Reserve username index in Firestore
+      try {
+        await setDoc(doc(db, 'usernames', generatedUsername), { uid: newUid, email: patientEmail });
+      } catch (_) {}
+
+      setCreatedPatient({
+        anvayId: finalAnvayId,
+        fullName,
+        email: patientEmail,
+        username: generatedUsername,
+        password: patientPassword
       });
-
-      if (result.data?.success) {
-        const patientUid = result.data.uid;
-        const updates = {
-          fullName,
-          district: formData.district,
-          state: formData.state,
-          emergencyContactName: formData.emergencyName,
-          emergencyContactPhone: formData.emergencyNumber,
-          allergies: initialAllergies,
-          chronicConditions: initialConditions
-        };
-
-        if (user?.hospitalId) {
-          updates.registeredAtHospitalId = user.hospitalId;
-        }
-
-        // Upload Profile Photo & ID Doc to Storage if selected
-        if (profilePhoto) {
-          try {
-            const photoRef = ref(storage, `users/${patientUid}/profile.jpg`);
-            await uploadBytes(photoRef, profilePhoto);
-            updates.photoURL = await getDownloadURL(photoRef);
-          } catch (storageErr) {
-            console.warn('Profile photo upload error:', storageErr);
-          }
-        }
-
-        await updateDoc(doc(db, 'users', patientUid), updates);
-
-        setCreatedPatient({
-          anvayId: result.data.anvayId,
-          fullName,
-          email: formData.email
-        });
-      } else {
-        setError('Failed to create patient profile');
-      }
     } catch (err) {
-      console.error(err);
-      setError(err.message || 'Error occurred during patient creation');
+      console.error('Patient registration error:', err);
+      setError(err.message || 'Error occurred during patient registration.');
     } finally {
       setLoading(false);
     }
@@ -583,36 +653,69 @@ export const CreatePatientPage = () => {
 
       {/* Success Modal */}
       {createdPatient && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#101828]/70 backdrop-blur-xs">
-          <div className="bg-white max-w-md w-full rounded-[22px] p-8 text-center space-y-4 shadow-anvay-card animate-in fade-in zoom-in duration-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#101828]/70 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white max-w-md w-full rounded-[22px] p-7 text-center space-y-4 shadow-anvay-card animate-in fade-in zoom-in duration-200 my-4">
             <div className="w-16 h-16 rounded-full bg-[#ecfdf3] text-[#067647] flex items-center justify-center text-2xl font-bold mx-auto">
               ✓
             </div>
 
             <span className="text-[#0f6d8e] text-[11px] font-extrabold tracking-wider uppercase block">
-              ACCOUNT CREATED
+              PATIENT ACCOUNT CREATED
             </span>
 
-            <h2 className="text-2xl font-extrabold text-[#101828]">
-              Welcome to ANVAY
+            <h2 className="text-xl font-extrabold text-[#101828]">
+              {createdPatient.fullName}
             </h2>
 
             <p className="text-xs text-[#667085]">
-              Your secure healthcare identity has been created successfully.
+              Patient account is active and ready. Share these login credentials:
             </p>
 
-            <div className="p-4 bg-[#f8fbff] border border-[#e7edf4] rounded-[15px] space-y-1">
-              <small className="text-[#0f6d8e] text-[10px] font-bold block">YOUR UNIQUE ANVAY ID</small>
-              <strong className="text-lg font-mono text-[#101828] block">{createdPatient.anvayId}</strong>
-              <span className="text-[10px] text-[#98a2b3]">Keep this ID safe for hospital identification.</span>
+            <div className="p-4 bg-[#f8fbff] border border-[#e7edf4] rounded-[15px] space-y-2.5 font-mono text-xs text-left">
+              <div className="flex justify-between items-center pb-2 border-b border-[#e7edf4]">
+                <span className="text-[#667085] font-sans font-semibold">ANVAY Health ID:</span>
+                <strong className="text-[#0f6d8e] text-sm">{createdPatient.anvayId}</strong>
+              </div>
+              <div className="flex justify-between items-center pb-2 border-b border-[#e7edf4]">
+                <span className="text-[#667085] font-sans font-semibold">Login Email:</span>
+                <strong className="text-[#101828] select-all">{createdPatient.email}</strong>
+              </div>
+              <div className="flex justify-between items-center pb-2 border-b border-[#e7edf4]">
+                <span className="text-[#667085] font-sans font-semibold">Username:</span>
+                <strong className="text-[#101828]">{createdPatient.username}</strong>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-[#667085] font-sans font-semibold">Password:</span>
+                <strong className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">{createdPatient.password}</strong>
+              </div>
             </div>
 
-            <div className="pt-2">
+            <p className="text-[11px] text-[#067647] bg-[#ecfdf3] p-2 rounded-lg font-medium">
+              ✓ Patient can log in directly at the login portal using their ANVAY ID or Email and this password.
+            </p>
+
+            <div className="pt-2 flex flex-col gap-2">
               <button
                 onClick={() => navigate(`/clinical-snapshot?anvayId=${createdPatient.anvayId}`)}
-                className="w-full h-[48px] bg-[#0f6d8e] hover:bg-[#0b5874] text-white font-bold rounded-[9px] text-xs transition"
+                className="w-full h-[46px] bg-[#0f6d8e] hover:bg-[#0b5874] text-white font-bold rounded-[9px] text-xs transition"
               >
-                View Patient Snapshot →
+                View Patient Clinical Snapshot →
+              </button>
+              <button
+                onClick={() => {
+                  setCreatedPatient(null);
+                  setFormData({
+                    firstName: '', lastName: '', email: '', mobile: '',
+                    dateOfBirth: '', aadhaar: '', gender: 'Male', bloodGroup: 'O+',
+                    condition: '', allergy: '', medication: '', emergencyName: '',
+                    emergencyNumber: '', district: 'North West Delhi', state: 'Delhi',
+                    password: '', confirmPassword: ''
+                  });
+                  setPreviewId(`ANVAY-2026-${Math.random().toString(36).substring(2, 8).toUpperCase()}`);
+                }}
+                className="w-full h-[40px] bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-[9px] text-xs transition"
+              >
+                Register Another Patient
               </button>
             </div>
           </div>
