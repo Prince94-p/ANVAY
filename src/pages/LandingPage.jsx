@@ -358,8 +358,19 @@ export const LandingPage = () => {
       </section>
 
       {/* Footer */}
-      <footer className="mt-16 px-[6%] sm:px-[8%] py-8 bg-[#101828] text-[#98a2b3] flex flex-col sm:flex-row justify-between items-center gap-2 text-xs">
+      <footer className="mt-16 px-[6%] sm:px-[8%] py-8 bg-[#101828] text-[#98a2b3] flex flex-col sm:flex-row justify-between items-center gap-4 text-xs">
         <strong className="text-white tracking-[2px] text-sm">{t('footer.brand')}</strong>
+        <div className="flex items-center gap-5 flex-wrap font-medium">
+          <Link to="/privacy-policy" className="hover:text-white transition">
+            Privacy Policy
+          </Link>
+          <Link to="/terms" className="hover:text-white transition">
+            Terms of Service
+          </Link>
+          <a href="mailto:support@example.com" className="hover:text-white transition">
+            Contact
+          </a>
+        </div>
         <p>{t('footer.team')}</p>
       </footer>
     </div>

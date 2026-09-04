@@ -167,6 +167,18 @@ export const LoginPage = () => {
             >
               {loading ? t('loginPage.loggingIn') : t('loginPage.submitBtn')}
             </button>
+
+            <p className="text-center text-[11px] text-[#667085] leading-relaxed pt-1">
+              By continuing, you agree to the{' '}
+              <Link to="/terms" className="text-[#0f6d8e] font-semibold hover:underline">
+                Terms of Service
+              </Link>{' '}
+              and acknowledge the{' '}
+              <Link to="/privacy-policy" className="text-[#0f6d8e] font-semibold hover:underline">
+                Privacy Policy
+              </Link>
+              .
+            </p>
           </form>
 
           {/* Quick Role Fill Pills */}

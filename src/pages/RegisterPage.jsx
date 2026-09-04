@@ -24,11 +24,16 @@ export const RegisterPage = () => {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('patient');
 
+  // Consent states (mandatory for registration)
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [healthDataConsent, setHealthDataConsent] = useState(false);
+
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const tab = params.get('tab');
     if (tab === 'hospital') {
       setActiveTab('hospital');
+      setHealthDataConsent(false);
     } else {
       setActiveTab('patient');
     }
@@ -88,9 +93,26 @@ export const RegisterPage = () => {
 
   const handlePatientSubmit = async (e) => {
     e.preventDefault();
+    if (!termsAccepted) {
+      setError('Please accept the Terms of Service and Privacy Policy to continue.');
+      return;
+    }
+    if (!healthDataConsent) {
+      setError('Please provide health data consent to create a patient account.');
+      return;
+    }
     if (patientPhotoError) return;
     setLoading(true);
     setError(null);
+
+    const consentData = {
+      termsAccepted: true,
+      privacyPolicyAccepted: true,
+      privacyPolicyVersion: '2026-09-04',
+      termsAcceptedAt: serverTimestamp(),
+      healthDataConsent: true,
+      healthDataConsentAt: serverTimestamp(),
+    };
 
     try {
       let uid, anvayId;
@@ -112,6 +134,11 @@ export const RegisterPage = () => {
         });
         uid = result.data.uid;
         anvayId = result.data.anvayId;
+
+        // Persist consent metadata to existing user document
+        if (uid) {
+          await setDoc(doc(db, 'users', uid), consentData, { merge: true });
+        }
       } catch (cfErr) {
         console.warn('Cloud Function unavailable, using direct Auth registration:', cfErr);
         // Fallback to direct Firebase Auth + Firestore
@@ -139,7 +166,8 @@ export const RegisterPage = () => {
           govtIdNumber: patientData.govtIdNumber,
           status: 'Active',
           verified: true,
-          createdAt: new Date().toISOString()
+          createdAt: new Date().toISOString(),
+          ...consentData,
         });
 
         try {
@@ -174,9 +202,20 @@ export const RegisterPage = () => {
 
   const handleHospitalSubmit = async (e) => {
     e.preventDefault();
+    if (!termsAccepted) {
+      setError('Please accept the Terms of Service and Privacy Policy to continue.');
+      return;
+    }
     if (hospitalPhotoError) return;
     setLoading(true);
     setError(null);
+
+    const consentData = {
+      termsAccepted: true,
+      privacyPolicyAccepted: true,
+      privacyPolicyVersion: '2026-09-04',
+      termsAcceptedAt: serverTimestamp(),
+    };
 
     try {
       let uid, anvayId, hospitalId;
@@ -199,6 +238,11 @@ export const RegisterPage = () => {
         uid = result.data.uid;
         anvayId = result.data.anvayId;
         hospitalId = result.data.hospitalId;
+
+        // Persist consent metadata to existing user document
+        if (uid) {
+          await setDoc(doc(db, 'users', uid), consentData, { merge: true });
+        }
       } catch (cfErr) {
         console.warn('Cloud Function unavailable, using direct hospital registration:', cfErr);
         const userCredential = await createUserWithEmailAndPassword(
@@ -228,7 +272,8 @@ export const RegisterPage = () => {
           representative: hospitalData.representative,
           status: 'Pending Verification',
           verified: false,
-          createdAt: new Date().toISOString()
+          createdAt: new Date().toISOString(),
+          ...consentData,
         });
 
         await setDoc(doc(db, 'hospitals', hospitalId), {
@@ -365,7 +410,7 @@ export const RegisterPage = () => {
             </button>
             <button
               type="button"
-              onClick={() => { setActiveTab('hospital'); setError(null); }}
+              onClick={() => { setActiveTab('hospital'); setError(null); setHealthDataConsent(false); }}
               className={`flex-1 py-3 text-sm font-bold rounded-lg flex items-center justify-center gap-2 transition ${
                 activeTab === 'hospital' ? 'bg-white text-[#0f6d8e] shadow-sm' : 'text-[#667085] hover:text-[#0f6d8e]'
               }`}
@@ -444,7 +489,64 @@ export const RegisterPage = () => {
                 </div>
               </div>
 
-              <button type="submit" disabled={loading || !!patientPhotoError} className="w-full py-3.5 bg-[#0f6d8e] text-white font-bold rounded-lg hover:bg-[#0b5874] transition mt-6 disabled:opacity-50">
+              {/* Patient Mandatory Consent Checkboxes */}
+              <div className="space-y-3 pt-3 border-t border-gray-100">
+                <div className="flex items-start gap-2.5">
+                  <input
+                    id="patient-terms"
+                    type="checkbox"
+                    checked={termsAccepted}
+                    onChange={(e) => setTermsAccepted(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-[#d0d5dd] text-[#0f6d8e] focus:ring-2 focus:ring-[#20a7ce]/20 accent-[#0f6d8e] cursor-pointer"
+                  />
+                  <label htmlFor="patient-terms" className="text-xs text-[#344054] leading-relaxed select-none cursor-pointer">
+                    I have read and agree to the{' '}
+                    <Link
+                      to="/terms"
+                      onClick={(e) => e.stopPropagation()}
+                      className="text-[#0f6d8e] font-semibold hover:underline"
+                    >
+                      Terms of Service
+                    </Link>{' '}
+                    and acknowledge the{' '}
+                    <Link
+                      to="/privacy-policy"
+                      onClick={(e) => e.stopPropagation()}
+                      className="text-[#0f6d8e] font-semibold hover:underline"
+                    >
+                      Privacy Policy
+                    </Link>
+                    . *
+                  </label>
+                </div>
+
+                <div className="flex items-start gap-2.5">
+                  <input
+                    id="patient-health-consent"
+                    type="checkbox"
+                    checked={healthDataConsent}
+                    onChange={(e) => setHealthDataConsent(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-[#d0d5dd] text-[#0f6d8e] focus:ring-2 focus:ring-[#20a7ce]/20 accent-[#0f6d8e] cursor-pointer"
+                  />
+                  <label htmlFor="patient-health-consent" className="text-xs text-[#344054] leading-relaxed select-none cursor-pointer">
+                    I consent to ANVAY processing my health information for providing connected healthcare services as described in the{' '}
+                    <Link
+                      to="/privacy-policy"
+                      onClick={(e) => e.stopPropagation()}
+                      className="text-[#0f6d8e] font-semibold hover:underline"
+                    >
+                      Privacy Policy
+                    </Link>
+                    . *
+                  </label>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading || !termsAccepted || !healthDataConsent || !!patientPhotoError}
+                className="w-full py-3.5 bg-[#0f6d8e] text-white font-bold rounded-lg hover:bg-[#0b5874] transition mt-6 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
                 {loading ? 'Creating your account...' : t('registerPage.submit')}
               </button>
             </form>
@@ -511,7 +613,43 @@ export const RegisterPage = () => {
                 </div>
               </div>
 
-              <button type="submit" disabled={loading || !!hospitalPhotoError} className="w-full py-3.5 bg-[#0f6d8e] text-white font-bold rounded-lg hover:bg-[#0b5874] transition mt-6 disabled:opacity-50">
+              {/* Hospital Mandatory Consent Checkbox */}
+              <div className="pt-3 border-t border-gray-100 mt-4">
+                <div className="flex items-start gap-2.5">
+                  <input
+                    id="hospital-terms"
+                    type="checkbox"
+                    checked={termsAccepted}
+                    onChange={(e) => setTermsAccepted(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-[#d0d5dd] text-[#0f6d8e] focus:ring-2 focus:ring-[#20a7ce]/20 accent-[#0f6d8e] cursor-pointer"
+                  />
+                  <label htmlFor="hospital-terms" className="text-xs text-[#344054] leading-relaxed select-none cursor-pointer">
+                    I have read and agree to the{' '}
+                    <Link
+                      to="/terms"
+                      onClick={(e) => e.stopPropagation()}
+                      className="text-[#0f6d8e] font-semibold hover:underline"
+                    >
+                      Terms of Service
+                    </Link>{' '}
+                    and acknowledge the{' '}
+                    <Link
+                      to="/privacy-policy"
+                      onClick={(e) => e.stopPropagation()}
+                      className="text-[#0f6d8e] font-semibold hover:underline"
+                    >
+                      Privacy Policy
+                    </Link>
+                    . *
+                  </label>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading || !termsAccepted || !!hospitalPhotoError}
+                className="w-full py-3.5 bg-[#0f6d8e] text-white font-bold rounded-lg hover:bg-[#0b5874] transition mt-6 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
                 {loading ? 'Registering Hospital...' : t('registerPage.submitHospital')}
               </button>
             </form>

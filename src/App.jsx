@@ -28,6 +28,7 @@ import { DiseaseAnalyticsPage } from './pages/DiseaseAnalyticsPage';
 import { SuperAdminDashboard } from './pages/SuperAdminDashboard';
 import { HospitalVerificationManagementPage } from './pages/HospitalVerificationManagementPage';
 import { AuditLogsPage } from './pages/AuditLogsPage';
+import { PrivacyPolicy } from './pages/PrivacyPolicy';
 
 const ProtectedRoute = ({ children, allowedRoles }) => {
   const { isAuthenticated, loading, user } = useAuth();
@@ -62,7 +63,7 @@ export function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const location = useLocation();
 
-  const publicRoutes = ['/', '/login', '/register', '/register-hospital', '/verification-status'];
+  const publicRoutes = ['/', '/login', '/register', '/register-hospital', '/verification-status', '/privacy-policy', '/terms'];
   const isPublicPage = publicRoutes.includes(location.pathname) || location.pathname.startsWith('/register');
   const isPatient = user?.role === 'Patient';
 
@@ -97,6 +98,7 @@ export function App() {
               <Route path="/register" element={<RegisterPage />} />
               <Route path="/register-hospital" element={<Navigate to="/register?tab=hospital" replace />} />
               <Route path="/verification-status" element={<HospitalVerificationStatusPage />} />
+              <Route path="/privacy-policy" element={<PrivacyPolicy />} />
 
               {/* Patient Portal */}
               <Route path="/patient-dashboard" element={<ProtectedRoute allowedRoles={['Patient', 'Super Admin']}><PatientDashboard /></ProtectedRoute>} />
